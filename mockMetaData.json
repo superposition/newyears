@@ -1,6 +1,6 @@
 {                                                                             
     "name": "ROAX's Mock AI Agent",                                                                                               
-    "description": "An AI agent that open red packets",                   
+    "description": "An AI agent that opens red packets",                   
     "image": "https://roax.network/images/roax_words.png",
     "capabilities": ["scanning_landscape", "scanning_qr_codes", "open_red_packet"]
   }
