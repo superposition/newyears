@@ -11,203 +11,197 @@ import {StakingManager} from "./StakingManager.sol";
 
 /**
  * @title AgentIdentityRegistry
- * @notice ERC-721 based identity registry for trustless AI agents with PLASMA staking requirement
- * @dev Implements ERC-8004 Identity interface with custom staking mechanism
+ * @notice ERC-8004 spec-compliant identity registry with PLASMA staking extension
  */
 contract AgentIdentityRegistry is ERC721, ERC721URIStorage, ERC721Enumerable, Ownable, IERC8004Identity {
-    /// @notice Staking manager contract
     StakingManager public immutable stakingManager;
 
-    /// @notice Counter for agent IDs
     uint256 private _nextAgentId;
 
-    /// @notice Mapping of agentId to agentWallet address
-    mapping(uint256 => address) private _agentWallets;
-
-    /// @notice Mapping of agentId to metadata (key => value)
+    /// @notice Metadata storage: agentId => metadataKey => metadataValue
     mapping(uint256 => mapping(string => bytes)) private _agentMetadata;
 
-    /// @notice EIP-712 domain separator
     bytes32 private immutable _domainSeparator;
 
-    /// @notice Contract name for EIP-712
-    string private constant NAME = "AgentIdentityRegistry";
-
-    /// @notice Contract version for EIP-712
+    string private constant NAME = "ERC8004IdentityRegistry";
     string private constant VERSION = "1";
 
-    error NotAgentOwner();
+    string private constant RESERVED_AGENT_WALLET_KEY = "agentWallet";
+
+    error NotAuthorized();
     error AgentNotFound();
     error InvalidSignature();
     error SignatureExpired();
     error InvalidAddress();
+    error ReservedMetadataKey();
+    error DeadlineTooFar();
 
-    /**
-     * @notice Constructor
-     * @param _stakingManager Address of the staking manager contract
-     */
     constructor(address payable _stakingManager) ERC721("ERC8004 Agent Identity", "AGENT") Ownable(msg.sender) {
         if (_stakingManager == address(0)) revert InvalidAddress();
         stakingManager = StakingManager(_stakingManager);
-
-        // Compute EIP-712 domain separator
         _domainSeparator = SignatureVerifier.computeDomainSeparator(NAME, VERSION, block.chainid, address(this));
-
-        // Start agent IDs at 1
         _nextAgentId = 1;
     }
 
-    /**
-     * @notice Register a new agent with PLASMA staking
-     * @param agentURI URI pointing to agent metadata
-     * @param metadata Initial metadata entries
-     * @return agentId The newly minted agent token ID
-     */
+    // ── Registration Overloads ──
+
+    /// @notice Bare registration (no URI, no metadata)
+    function register() external payable override returns (uint256 agentId) {
+        MetadataEntry[] memory empty = new MetadataEntry[](0);
+        return _register("", empty);
+    }
+
+    /// @notice URI-only registration
+    function register(string calldata agentURI) external payable override returns (uint256 agentId) {
+        MetadataEntry[] memory empty = new MetadataEntry[](0);
+        return _register(agentURI, empty);
+    }
+
+    /// @notice Full registration with URI and metadata
     function register(string calldata agentURI, MetadataEntry[] calldata metadata)
         external
         payable
         override
         returns (uint256 agentId)
     {
+        return _register(agentURI, metadata);
+    }
+
+    function _register(string memory agentURI, MetadataEntry[] memory metadata) internal returns (uint256 agentId) {
         agentId = _nextAgentId++;
 
-        // Stake native PLASMA (will revert if insufficient value)
+        // Stake native PLASMA
         stakingManager.stake{value: msg.value}(agentId);
 
-        // Mint NFT to caller
+        // Mint NFT
         _safeMint(msg.sender, agentId);
-        _setTokenURI(agentId, agentURI);
-
-        // Set initial metadata
-        for (uint256 i = 0; i < metadata.length; i++) {
-            _agentMetadata[agentId][metadata[i].key] = metadata[i].value;
-            emit AgentMetadataUpdated(agentId, metadata[i].key, metadata[i].value);
+        if (bytes(agentURI).length > 0) {
+            _setTokenURI(agentId, agentURI);
         }
 
-        emit AgentRegistered(agentId, msg.sender, agentURI);
+        // Set initial metadata (reject reserved key)
+        for (uint256 i = 0; i < metadata.length; i++) {
+            if (keccak256(bytes(metadata[i].metadataKey)) == keccak256(bytes(RESERVED_AGENT_WALLET_KEY))) {
+                revert ReservedMetadataKey();
+            }
+            _agentMetadata[agentId][metadata[i].metadataKey] = metadata[i].metadataValue;
+            emit MetadataSet(agentId, metadata[i].metadataKey, metadata[i].metadataKey, metadata[i].metadataValue);
+        }
+
+        // Auto-set agentWallet to msg.sender
+        _agentMetadata[agentId][RESERVED_AGENT_WALLET_KEY] = abi.encodePacked(msg.sender);
+        emit MetadataSet(agentId, RESERVED_AGENT_WALLET_KEY, RESERVED_AGENT_WALLET_KEY, abi.encodePacked(msg.sender));
+
+        emit Registered(agentId, agentURI, msg.sender);
     }
 
-    /**
-     * @notice Deregister an agent (burn NFT and refund stake)
-     * @param agentId The token ID of the agent to deregister
-     */
+    // ── Deregister (custom PLASMA extension) ──
+
     function deregister(uint256 agentId) external override {
-        address owner = ownerOf(agentId);
-        if (msg.sender != owner) revert NotAgentOwner();
+        address tokenOwner = ownerOf(agentId);
+        if (msg.sender != tokenOwner) revert NotAuthorized();
 
-        // Refund stake to owner
-        stakingManager.unstake(owner, agentId);
-
-        // Burn the NFT
+        stakingManager.unstake(tokenOwner, agentId);
         _burn(agentId);
 
-        emit AgentDeregistered(agentId, owner);
+        emit AgentDeregistered(agentId, tokenOwner);
     }
 
-    /**
-     * @notice Set or update the agent URI
-     * @param agentId The token ID of the agent
-     * @param newURI The new URI
-     */
+    // ── URI ──
+
     function setAgentURI(uint256 agentId, string calldata newURI) external override {
-        if (msg.sender != ownerOf(agentId)) revert NotAgentOwner();
+        if (!_isAuthorizedOrOwner(msg.sender, agentId)) revert NotAuthorized();
         _setTokenURI(agentId, newURI);
-        emit AgentURIUpdated(agentId, newURI);
+        emit URIUpdated(agentId, newURI, msg.sender);
     }
 
-    /**
-     * @notice Set or update agent metadata
-     * @param agentId The token ID of the agent
-     * @param key The metadata key
-     * @param value The metadata value
-     */
-    function setMetadata(uint256 agentId, string calldata key, bytes calldata value) external override {
-        if (msg.sender != ownerOf(agentId)) revert NotAgentOwner();
-        _agentMetadata[agentId][key] = value;
-        emit AgentMetadataUpdated(agentId, key, value);
+    // ── Metadata ──
+
+    function getMetadata(uint256 agentId, string calldata metadataKey) external view override returns (bytes memory) {
+        if (!_exists(agentId)) revert AgentNotFound();
+        return _agentMetadata[agentId][metadataKey];
     }
 
-    /**
-     * @notice Set the agent wallet address via EIP-712 signature
-     * @param agentId The token ID of the agent
-     * @param agentWallet The wallet address to set
-     * @param deadline Signature expiration timestamp
-     * @param signature EIP-712 signature from the agent wallet
-     */
-    function setAgentWallet(uint256 agentId, address agentWallet, uint256 deadline, bytes calldata signature)
+    function setMetadata(uint256 agentId, string calldata metadataKey, bytes calldata metadataValue)
         external
         override
     {
-        if (msg.sender != ownerOf(agentId)) revert NotAgentOwner();
-        if (agentWallet == address(0)) revert InvalidAddress();
+        if (!_isAuthorizedOrOwner(msg.sender, agentId)) revert NotAuthorized();
+        if (keccak256(bytes(metadataKey)) == keccak256(bytes(RESERVED_AGENT_WALLET_KEY))) {
+            revert ReservedMetadataKey();
+        }
+        _agentMetadata[agentId][metadataKey] = metadataValue;
+        emit MetadataSet(agentId, metadataKey, metadataKey, metadataValue);
+    }
 
-        // Verify signature
-        bool isValid =
-            SignatureVerifier.verifySetAgentWallet(_domainSeparator, agentId, agentWallet, deadline, signature);
+    // ── Agent Wallet ──
 
+    function setAgentWallet(uint256 agentId, address newWallet, uint256 deadline, bytes calldata signature)
+        external
+        override
+    {
+        if (!_isAuthorizedOrOwner(msg.sender, agentId)) revert NotAuthorized();
+        if (newWallet == address(0)) revert InvalidAddress();
+
+        // 5-minute deadline check
+        if (deadline > block.timestamp + 5 minutes) revert DeadlineTooFar();
+
+        address tokenOwner = ownerOf(agentId);
+        bool isValid = SignatureVerifier.verifySetAgentWallet(
+            _domainSeparator, agentId, newWallet, tokenOwner, deadline, signature
+        );
         if (!isValid) revert InvalidSignature();
 
-        _agentWallets[agentId] = agentWallet;
-        emit AgentWalletSet(agentId, agentWallet);
+        _agentMetadata[agentId][RESERVED_AGENT_WALLET_KEY] = abi.encodePacked(newWallet);
+        emit MetadataSet(
+            agentId, RESERVED_AGENT_WALLET_KEY, RESERVED_AGENT_WALLET_KEY, abi.encodePacked(newWallet)
+        );
     }
 
-    /**
-     * @notice Get the agent URI
-     * @param agentId The token ID of the agent
-     * @return The agent URI
-     */
-    function getAgentURI(uint256 agentId) external view override returns (string memory) {
-        return tokenURI(agentId);
-    }
-
-    /**
-     * @notice Get agent metadata value
-     * @param agentId The token ID of the agent
-     * @param key The metadata key
-     * @return The metadata value
-     */
-    function getMetadata(uint256 agentId, string calldata key) external view override returns (bytes memory) {
-        if (!_exists(agentId)) revert AgentNotFound();
-        return _agentMetadata[agentId][key];
-    }
-
-    /**
-     * @notice Get the agent wallet address
-     * @param agentId The token ID of the agent
-     * @return The agent wallet address (address(0) if not set)
-     */
     function getAgentWallet(uint256 agentId) external view override returns (address) {
         if (!_exists(agentId)) revert AgentNotFound();
-        return _agentWallets[agentId];
+        bytes memory walletBytes = _agentMetadata[agentId][RESERVED_AGENT_WALLET_KEY];
+        if (walletBytes.length == 0) return address(0);
+        return address(bytes20(walletBytes));
     }
 
-    /**
-     * @notice Check if an agent exists
-     * @param agentId The token ID to check
-     * @return True if the agent exists
-     */
+    function unsetAgentWallet(uint256 agentId) external override {
+        if (!_isAuthorizedOrOwner(msg.sender, agentId)) revert NotAuthorized();
+        delete _agentMetadata[agentId][RESERVED_AGENT_WALLET_KEY];
+        emit MetadataSet(agentId, RESERVED_AGENT_WALLET_KEY, RESERVED_AGENT_WALLET_KEY, "");
+    }
+
+    // ── Queries ──
+
+    function isAuthorizedOrOwner(address spender, uint256 agentId) external view override returns (bool) {
+        return _isAuthorizedOrOwner(spender, agentId);
+    }
+
     function exists(uint256 agentId) external view override returns (bool) {
         return _exists(agentId);
     }
 
-    /**
-     * @notice Get EIP-712 domain separator
-     * @return The domain separator
-     */
     function getDomainSeparator() external view returns (bytes32) {
         return _domainSeparator;
     }
 
-    /**
-     * @dev Internal function to check if token exists
-     */
+    function getAgentURI(uint256 agentId) external view returns (string memory) {
+        return tokenURI(agentId);
+    }
+
+    // ── Internal ──
+
+    function _isAuthorizedOrOwner(address spender, uint256 agentId) internal view returns (bool) {
+        if (!_exists(agentId)) return false;
+        address tokenOwner = ownerOf(agentId);
+        return (spender == tokenOwner || isApprovedForAll(tokenOwner, spender) || getApproved(agentId) == spender);
+    }
+
     function _exists(uint256 tokenId) internal view returns (bool) {
         return _ownerOf(tokenId) != address(0);
     }
 
-    /**
-     * @dev Override _update to clear agent wallet on transfer (per ERC-8004 spec)
-     */
+    /// @dev Clear agentWallet metadata on transfer (not on mint/burn)
     function _update(address to, uint256 tokenId, address auth)
         internal
         override(ERC721, ERC721Enumerable)
@@ -215,31 +209,23 @@ contract AgentIdentityRegistry is ERC721, ERC721URIStorage, ERC721Enumerable, Ow
     {
         address from = _ownerOf(tokenId);
 
-        // Clear agent wallet on transfer (not on mint)
+        // Clear agentWallet on transfer (not mint, not burn)
         if (from != address(0) && to != address(0)) {
-            delete _agentWallets[tokenId];
+            delete _agentMetadata[tokenId][RESERVED_AGENT_WALLET_KEY];
+            emit MetadataSet(tokenId, RESERVED_AGENT_WALLET_KEY, RESERVED_AGENT_WALLET_KEY, "");
         }
 
         return super._update(to, tokenId, auth);
     }
 
-    /**
-     * @dev Override _increaseBalance for Enumerable
-     */
     function _increaseBalance(address account, uint128 value) internal override(ERC721, ERC721Enumerable) {
         super._increaseBalance(account, value);
     }
 
-    /**
-     * @dev Override tokenURI for URIStorage
-     */
     function tokenURI(uint256 tokenId) public view override(ERC721, ERC721URIStorage) returns (string memory) {
         return super.tokenURI(tokenId);
     }
 
-    /**
-     * @dev Override supportsInterface
-     */
     function supportsInterface(bytes4 interfaceId)
         public
         view

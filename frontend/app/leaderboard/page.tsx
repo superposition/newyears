@@ -36,18 +36,11 @@ export default function LeaderboardPage() {
       ?.map((r) => (r.status === "success" ? (r.result as bigint) : null))
       .filter((id): id is bigint => id !== null) ?? [];
 
-  // Get owners + feedback counts for each agent
+  // Get owners + reputation summaries for each agent
   const ownerContracts = agentIds.map((id) => ({
     address: CONTRACTS.agentIdentityRegistry,
     abi: AgentIdentityRegistryABI,
     functionName: "ownerOf" as const,
-    args: [id],
-  }));
-
-  const feedbackContracts = agentIds.map((id) => ({
-    address: CONTRACTS.reputationRegistry,
-    abi: ReputationRegistryABI,
-    functionName: "getFeedbackCount" as const,
     args: [id],
   }));
 
@@ -63,11 +56,6 @@ export default function LeaderboardPage() {
     query: { enabled: agentIds.length > 0 },
   });
 
-  const { data: feedbacks } = useReadContracts({
-    contracts: feedbackContracts,
-    query: { enabled: agentIds.length > 0 },
-  });
-
   const { data: summaries } = useReadContracts({
     contracts: summaryContracts,
     query: { enabled: agentIds.length > 0 },
@@ -80,28 +68,23 @@ export default function LeaderboardPage() {
     avgScore: number;
   };
 
+  // getSummary returns [count: uint64, summaryValue: int128, summaryValueDecimals: uint8]
   const rows: AgentRow[] = agentIds
-    .map((id, i) => ({
-      id,
-      owner:
-        owners?.[i]?.status === "success"
-          ? (owners[i].result as string)
-          : "...",
-      feedbackCount:
-        feedbacks?.[i]?.status === "success"
-          ? Number(feedbacks[i].result as bigint)
-          : 0,
-      avgScore:
-        summaries?.[i]?.status === "success"
-          ? Number(
-              (
-                summaries[i].result as {
-                  averageValue: bigint;
-                }
-              ).averageValue,
-            )
-          : 0,
-    }))
+    .map((id, i) => {
+      const summaryResult = summaries?.[i]?.status === "success"
+        ? (summaries[i].result as readonly [bigint, bigint, number])
+        : null;
+
+      return {
+        id,
+        owner:
+          owners?.[i]?.status === "success"
+            ? (owners[i].result as string)
+            : "...",
+        feedbackCount: summaryResult ? Number(summaryResult[0]) : 0,
+        avgScore: summaryResult ? Number(summaryResult[1]) : 0,
+      };
+    })
     .sort((a, b) => b.avgScore - a.avgScore);
 
   return (

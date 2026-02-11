@@ -7,121 +7,64 @@ pragma solidity ^0.8.24;
  * @dev Extends ERC-721 to provide on-chain identity for AI agents
  */
 interface IERC8004Identity {
-    /**
-     * @notice Metadata entry structure
-     * @param key Metadata key
-     * @param value Metadata value (arbitrary bytes)
-     */
     struct MetadataEntry {
-        string key;
-        bytes value;
+        string metadataKey;
+        bytes metadataValue;
     }
 
-    /**
-     * @notice Emitted when a new agent is registered
-     * @param agentId The token ID of the registered agent
-     * @param owner The owner address of the agent
-     * @param agentURI The URI pointing to agent metadata
-     */
-    event AgentRegistered(uint256 indexed agentId, address indexed owner, string agentURI);
+    // ── Spec Events ──
 
-    /**
-     * @notice Emitted when an agent is deregistered
-     * @param agentId The token ID of the deregistered agent
-     * @param owner The owner address of the agent
-     */
+    event Registered(uint256 indexed agentId, string agentURI, address indexed owner);
+
+    event MetadataSet(
+        uint256 indexed agentId,
+        string indexed indexedMetadataKey,
+        string metadataKey,
+        bytes metadataValue
+    );
+
+    event URIUpdated(uint256 indexed agentId, string newURI, address indexed updatedBy);
+
+    // ── Custom Extension Events (PLASMA staking) ──
+
     event AgentDeregistered(uint256 indexed agentId, address indexed owner);
 
-    /**
-     * @notice Emitted when agent URI is updated
-     * @param agentId The token ID of the agent
-     * @param newURI The new URI
-     */
-    event AgentURIUpdated(uint256 indexed agentId, string newURI);
+    // ── Registration (all payable for PLASMA staking) ──
 
-    /**
-     * @notice Emitted when agent metadata is updated
-     * @param agentId The token ID of the agent
-     * @param key The metadata key
-     * @param value The metadata value
-     */
-    event AgentMetadataUpdated(uint256 indexed agentId, string key, bytes value);
+    function register() external payable returns (uint256 agentId);
 
-    /**
-     * @notice Emitted when agent wallet is set
-     * @param agentId The token ID of the agent
-     * @param agentWallet The wallet address that can act on behalf of the agent
-     */
-    event AgentWalletSet(uint256 indexed agentId, address indexed agentWallet);
+    function register(string calldata agentURI) external payable returns (uint256 agentId);
 
-    /**
-     * @notice Register a new agent
-     * @param agentURI URI pointing to agent metadata (e.g., IPFS hash)
-     * @param metadata Initial metadata entries
-     * @return agentId The newly minted agent token ID
-     */
     function register(string calldata agentURI, MetadataEntry[] calldata metadata)
         external
         payable
         returns (uint256 agentId);
 
-    /**
-     * @notice Deregister an agent (burns the NFT)
-     * @param agentId The token ID of the agent to deregister
-     */
+    // ── Custom Extension (PLASMA unstaking) ──
+
     function deregister(uint256 agentId) external;
 
-    /**
-     * @notice Set or update the agent URI
-     * @param agentId The token ID of the agent
-     * @param newURI The new URI
-     */
+    // ── URI ──
+
     function setAgentURI(uint256 agentId, string calldata newURI) external;
 
-    /**
-     * @notice Set or update agent metadata
-     * @param agentId The token ID of the agent
-     * @param key The metadata key
-     * @param value The metadata value
-     */
-    function setMetadata(uint256 agentId, string calldata key, bytes calldata value) external;
+    // ── Metadata ──
 
-    /**
-     * @notice Set the agent wallet address via EIP-712 signature
-     * @param agentId The token ID of the agent
-     * @param agentWallet The wallet address to set
-     * @param deadline Signature expiration timestamp
-     * @param signature EIP-712 signature from the agent wallet
-     */
-    function setAgentWallet(uint256 agentId, address agentWallet, uint256 deadline, bytes calldata signature)
-        external;
+    function getMetadata(uint256 agentId, string calldata metadataKey) external view returns (bytes memory);
 
-    /**
-     * @notice Get the agent URI
-     * @param agentId The token ID of the agent
-     * @return The agent URI
-     */
-    function getAgentURI(uint256 agentId) external view returns (string memory);
+    function setMetadata(uint256 agentId, string calldata metadataKey, bytes calldata metadataValue) external;
 
-    /**
-     * @notice Get agent metadata value
-     * @param agentId The token ID of the agent
-     * @param key The metadata key
-     * @return The metadata value
-     */
-    function getMetadata(uint256 agentId, string calldata key) external view returns (bytes memory);
+    // ── Agent Wallet ──
 
-    /**
-     * @notice Get the agent wallet address
-     * @param agentId The token ID of the agent
-     * @return The agent wallet address (address(0) if not set)
-     */
+    function setAgentWallet(uint256 agentId, address newWallet, uint256 deadline, bytes calldata signature) external;
+
     function getAgentWallet(uint256 agentId) external view returns (address);
 
-    /**
-     * @notice Check if an agent exists
-     * @param agentId The token ID to check
-     * @return True if the agent exists
-     */
+    function unsetAgentWallet(uint256 agentId) external;
+
+    // ── Queries ──
+
+    function isAuthorizedOrOwner(address spender, uint256 agentId) external view returns (bool);
+
     function exists(uint256 agentId) external view returns (bool);
 }

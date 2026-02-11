@@ -9,10 +9,6 @@ import {ReputationRegistry} from "../src/ReputationRegistry.sol";
 import {ValidationRegistry} from "../src/ValidationRegistry.sol";
 import {IERC8004Identity} from "../src/interfaces/IERC8004Identity.sol";
 
-/**
- * @title TestHelper
- * @notice Base test contract with common setup and utilities
- */
 contract TestHelper is Test {
     StakingManager public stakingManager;
     AgentIdentityRegistry public identityRegistry;
@@ -31,19 +27,16 @@ contract TestHelper is Test {
     function setUp() public virtual {
         vm.startPrank(deployer);
 
-        // Deploy contracts
         stakingManager = new StakingManager();
         identityRegistry = new AgentIdentityRegistry(payable(address(stakingManager)));
         reputationRegistry = new ReputationRegistry(address(identityRegistry));
         validationRegistry = new ValidationRegistry(address(identityRegistry));
 
-        // Wire up contracts
         stakingManager.setIdentityRegistry(address(identityRegistry));
         stakingManager.setReputationRegistry(address(reputationRegistry));
 
         vm.stopPrank();
 
-        // Fund test accounts with native PLASMA
         vm.deal(alice, 1000 ether);
         vm.deal(bob, 1000 ether);
         vm.deal(charlie, 1000 ether);
@@ -52,7 +45,7 @@ contract TestHelper is Test {
         vm.deal(deployer, 1000 ether);
     }
 
-    // Helper: Register an agent
+    // Helper: Register an agent (full overload)
     function registerAgent(address user, string memory uri) internal returns (uint256 agentId) {
         vm.startPrank(user);
         IERC8004Identity.MetadataEntry[] memory metadata = new IERC8004Identity.MetadataEntry[](0);
@@ -71,30 +64,43 @@ contract TestHelper is Test {
         vm.stopPrank();
     }
 
-    // Helper: Give feedback
+    // Helper: Give feedback (8-param version)
     function giveFeedback(address user, uint256 agentId, int128 value, string memory tag1, string memory tag2)
         internal
         returns (uint64 feedbackIndex)
     {
         vm.startPrank(user);
-        feedbackIndex = reputationRegistry.giveFeedback(agentId, value, 0, tag1, tag2, "");
+        feedbackIndex = reputationRegistry.giveFeedback(agentId, value, 0, tag1, tag2, "", "", bytes32(0));
         vm.stopPrank();
     }
 
-    // Helper: Request validation
-    function requestValidation(address user, address validator, uint256 agentId, string memory tag)
+    // Helper: Request validation (4-param, no tag — tag is in response only)
+    function requestValidation(address user, address validatorAddr, uint256 agentId, bytes32 requestHash)
         internal
-        returns (bytes32 requestHash)
     {
         vm.startPrank(user);
-        requestHash = validationRegistry.validationRequest(validator, agentId, "ipfs://validation", bytes32(0), tag);
+        validationRegistry.validationRequest(validatorAddr, agentId, "ipfs://validation", requestHash);
         vm.stopPrank();
     }
 
-    // Helper: Submit validation response
-    function submitValidationResponse(address validator, bytes32 requestHash, uint8 score) internal {
-        vm.startPrank(validator);
-        validationRegistry.validationResponse(requestHash, score, "", bytes32(0));
+    // Helper: Submit validation response (5-param, with tag)
+    function submitValidationResponse(address validatorAddr, bytes32 requestHash, uint8 score, string memory tag)
+        internal
+    {
+        vm.startPrank(validatorAddr);
+        validationRegistry.validationResponse(requestHash, score, "", bytes32(0), tag);
+        vm.stopPrank();
+    }
+
+    // Helper: Append response to feedback
+    function appendFeedbackResponse(
+        address responder,
+        uint256 agentId,
+        address clientAddress,
+        uint64 feedbackIndex
+    ) internal {
+        vm.startPrank(responder);
+        reputationRegistry.appendResponse(agentId, clientAddress, feedbackIndex, "ipfs://response", bytes32(0));
         vm.stopPrank();
     }
 }

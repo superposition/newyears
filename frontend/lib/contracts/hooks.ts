@@ -49,24 +49,6 @@ export function useAgentExists(agentId: bigint) {
   });
 }
 
-export function useFeedbackCount(agentId: bigint) {
-  return useReadContract({
-    address: CONTRACTS.reputationRegistry,
-    abi: ReputationRegistryABI,
-    functionName: "getFeedbackCount",
-    args: [agentId],
-  });
-}
-
-export function useAllFeedback(agentId: bigint, includeRevoked = false) {
-  return useReadContract({
-    address: CONTRACTS.reputationRegistry,
-    abi: ReputationRegistryABI,
-    functionName: "getAllFeedback",
-    args: [agentId, includeRevoked],
-  });
-}
-
 export function useReputationSummary(agentId: bigint) {
   return useReadContract({
     address: CONTRACTS.reputationRegistry,
@@ -76,20 +58,30 @@ export function useReputationSummary(agentId: bigint) {
   });
 }
 
-export function useValidationCount(agentId: bigint) {
+export function useAllFeedback(agentId: bigint) {
   return useReadContract({
+    address: CONTRACTS.reputationRegistry,
+    abi: ReputationRegistryABI,
+    functionName: "readAllFeedback",
+    args: [agentId, [], "", "", false],
+  });
+}
+
+export function useValidationCount(agentId: bigint) {
+  const { data: validations, ...rest } = useReadContract({
     address: CONTRACTS.validationRegistry,
     abi: ValidationRegistryABI,
-    functionName: "getValidationCount",
+    functionName: "getAgentValidations",
     args: [agentId],
   });
+  return { data: validations ? BigInt(validations.length) : undefined, ...rest };
 }
 
 export function useAllValidations(agentId: bigint) {
   return useReadContract({
     address: CONTRACTS.validationRegistry,
     abi: ValidationRegistryABI,
-    functionName: "getAllValidations",
+    functionName: "getAgentValidations",
     args: [agentId],
   });
 }
@@ -135,13 +127,6 @@ export function useLatestAgents(count: number) {
     args: [id],
   }));
 
-  const feedbackContracts = agentIds.map((id) => ({
-    address: CONTRACTS.reputationRegistry,
-    abi: ReputationRegistryABI,
-    functionName: "getFeedbackCount" as const,
-    args: [id],
-  }));
-
   const nameContracts = agentIds.map((id) => ({
     address: CONTRACTS.agentIdentityRegistry,
     abi: AgentIdentityRegistryABI,
@@ -156,11 +141,6 @@ export function useLatestAgents(count: number) {
 
   const { data: uris } = useReadContracts({
     contracts: uriContracts,
-    query: { enabled: agentIds.length > 0 },
-  });
-
-  const { data: feedbacks } = useReadContracts({
-    contracts: feedbackContracts,
     query: { enabled: agentIds.length > 0 },
   });
 
@@ -183,10 +163,7 @@ export function useLatestAgents(count: number) {
       names?.[i]?.status === "success"
         ? (names[i].result as `0x${string}`)
         : undefined,
-    feedbackCount:
-      feedbacks?.[i]?.status === "success"
-        ? Number(feedbacks[i].result as bigint)
-        : 0,
+    feedbackCount: 0,
   }));
 
   return { agents, total, ...rest };
@@ -216,7 +193,7 @@ export function useRegisterAgent() {
 
   const write = (
     uri: string,
-    metadata: { key: string; value: `0x${string}` }[]
+    metadata: { metadataKey: string; metadataValue: `0x${string}` }[]
   ) => {
     writeContract({
       address: CONTRACTS.agentIdentityRegistry,
@@ -269,13 +246,23 @@ export function useGiveFeedback() {
     value: bigint,
     tag1: string,
     tag2: string,
-    comment: string
+    endpoint: string,
+    feedbackURI: string,
   ) => {
     writeContract({
       address: CONTRACTS.reputationRegistry,
       abi: ReputationRegistryABI,
       functionName: "giveFeedback",
-      args: [agentId, value, 0, tag1, tag2, comment],
+      args: [
+        agentId,
+        value,
+        0,
+        tag1,
+        tag2,
+        endpoint,
+        feedbackURI,
+        "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`,
+      ],
     });
   };
 
@@ -299,6 +286,40 @@ export function useRevokeFeedback() {
       abi: ReputationRegistryABI,
       functionName: "revokeFeedback",
       args: [agentId, feedbackIndex],
+    });
+  };
+
+  return { write, hash, isPending, isConfirming, isConfirmed, error };
+}
+
+export function useAppendResponse() {
+  const {
+    writeContract,
+    data: hash,
+    isPending,
+    error,
+  } = useWriteContract();
+
+  const { isLoading: isConfirming, isSuccess: isConfirmed } =
+    useWaitForTransactionReceipt({ hash });
+
+  const write = (
+    agentId: bigint,
+    clientAddress: `0x${string}`,
+    feedbackIndex: bigint,
+    responseURI: string,
+  ) => {
+    writeContract({
+      address: CONTRACTS.reputationRegistry,
+      abi: ReputationRegistryABI,
+      functionName: "appendResponse",
+      args: [
+        agentId,
+        clientAddress,
+        feedbackIndex,
+        responseURI,
+        "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`,
+      ],
     });
   };
 

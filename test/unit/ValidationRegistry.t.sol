@@ -3,183 +3,202 @@ pragma solidity ^0.8.24;
 
 import {TestHelper} from "../TestHelper.sol";
 import {IERC8004Validation} from "../../src/interfaces/IERC8004Validation.sol";
+import {ValidationRegistry} from "../../src/ValidationRegistry.sol";
 
 contract ValidationRegistryTest is TestHelper {
     function test_ValidationRequest() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
+        bytes32 requestHash = keccak256("request1");
 
-        bytes32 requestHash = requestValidation(bob, validator1, agentId, "security");
+        // Owner can request validation
+        requestValidation(alice, validator1, agentId, requestHash);
 
-        IERC8004Validation.ValidationRecord memory record = validationRegistry.getValidation(requestHash);
-        assertEq(record.requestor, bob);
-        assertEq(record.validatorAddress, validator1);
-        assertEq(record.agentId, agentId);
-        assertEq(record.tag, "security");
-        assertEq(record.response, 0); // Pending
-        assertEq(validationRegistry.getValidationCount(agentId), 1);
+        (address validatorAddr, uint256 returnedAgentId, uint8 response, , , ) =
+            validationRegistry.getValidationStatus(requestHash);
+
+        assertEq(validatorAddr, validator1);
+        assertEq(returnedAgentId, agentId);
+        assertEq(response, 0); // Pending
+
+        bytes32[] memory agentValidations = validationRegistry.getAgentValidations(agentId);
+        assertEq(agentValidations.length, 1);
+        assertEq(agentValidations[0], requestHash);
+    }
+
+    function test_RevertWhen_ValidationRequest_NotOwner() public {
+        uint256 agentId = registerAgent(alice, "ipfs://agent1");
+        bytes32 requestHash = keccak256("request1");
+
+        // Bob is not owner/operator
+        vm.prank(bob);
+        vm.expectRevert(ValidationRegistry.NotAuthorized.selector);
+        validationRegistry.validationRequest(validator1, agentId, "ipfs://validation", requestHash);
     }
 
     function test_RevertWhen_ValidationRequest_AgentNotFound() public {
-        vm.prank(bob);
+        vm.prank(alice);
         vm.expectRevert();
-        validationRegistry.validationRequest(validator1, 999, "ipfs://validation", bytes32(0), "security");
+        validationRegistry.validationRequest(validator1, 999, "ipfs://validation", keccak256("request"));
     }
 
     function test_ValidationResponse() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
-        bytes32 requestHash = requestValidation(bob, validator1, agentId, "security");
+        bytes32 requestHash = keccak256("request1");
+        requestValidation(alice, validator1, agentId, requestHash);
 
-        submitValidationResponse(validator1, requestHash, 85);
+        submitValidationResponse(validator1, requestHash, 85, "security");
 
-        IERC8004Validation.ValidationRecord memory record = validationRegistry.getValidation(requestHash);
-        assertEq(record.response, 85);
+        (address validatorAddr, , uint8 response, , string memory tag, ) =
+            validationRegistry.getValidationStatus(requestHash);
+
+        assertEq(validatorAddr, validator1);
+        assertEq(response, 85);
+        assertEq(tag, "security");
+    }
+
+    function test_ValidationResponse_ZeroIsValid() public {
+        uint256 agentId = registerAgent(alice, "ipfs://agent1");
+        bytes32 requestHash = keccak256("request1");
+        requestValidation(alice, validator1, agentId, requestHash);
+
+        // 0 is a valid response score per spec
+        submitValidationResponse(validator1, requestHash, 0, "security");
+
+        (, , uint8 response, , , ) = validationRegistry.getValidationStatus(requestHash);
+        assertEq(response, 0);
+    }
+
+    function test_ValidationResponse_ProgressiveUpdate() public {
+        uint256 agentId = registerAgent(alice, "ipfs://agent1");
+        bytes32 requestHash = keccak256("request1");
+        requestValidation(alice, validator1, agentId, requestHash);
+
+        // First response
+        submitValidationResponse(validator1, requestHash, 60, "security");
+        (, , uint8 response1, , , ) = validationRegistry.getValidationStatus(requestHash);
+        assertEq(response1, 60);
+
+        // Update response
+        submitValidationResponse(validator1, requestHash, 85, "security-v2");
+        (, , uint8 response2, , string memory tag2, ) = validationRegistry.getValidationStatus(requestHash);
+        assertEq(response2, 85);
+        assertEq(tag2, "security-v2");
     }
 
     function test_RevertWhen_ValidationResponse_NotValidator() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
-        bytes32 requestHash = requestValidation(bob, validator1, agentId, "security");
+        bytes32 requestHash = keccak256("request1");
+        requestValidation(alice, validator1, agentId, requestHash);
 
         vm.prank(validator2);
-        vm.expectRevert();
-        validationRegistry.validationResponse(requestHash, 85, "", bytes32(0));
-    }
-
-    function test_RevertWhen_ValidationResponse_InvalidScore_Zero() public {
-        uint256 agentId = registerAgent(alice, "ipfs://agent1");
-        bytes32 requestHash = requestValidation(bob, validator1, agentId, "security");
-
-        vm.prank(validator1);
-        vm.expectRevert();
-        validationRegistry.validationResponse(requestHash, 0, "", bytes32(0));
+        vm.expectRevert(ValidationRegistry.NotAuthorized.selector);
+        validationRegistry.validationResponse(requestHash, 85, "", bytes32(0), "tag");
     }
 
     function test_RevertWhen_ValidationResponse_InvalidScore_Above100() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
-        bytes32 requestHash = requestValidation(bob, validator1, agentId, "security");
+        bytes32 requestHash = keccak256("request1");
+        requestValidation(alice, validator1, agentId, requestHash);
 
         vm.prank(validator1);
-        vm.expectRevert();
-        validationRegistry.validationResponse(requestHash, 101, "", bytes32(0));
+        vm.expectRevert(ValidationRegistry.InvalidResponse.selector);
+        validationRegistry.validationResponse(requestHash, 101, "", bytes32(0), "tag");
     }
 
-    function test_GetSummary_All() public {
+    function test_GetSummary() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
 
-        bytes32 request1 = requestValidation(bob, validator1, agentId, "security");
-        bytes32 request2 = requestValidation(bob, validator2, agentId, "performance");
-        bytes32 request3 = requestValidation(charlie, validator1, agentId, "security");
+        bytes32 req1 = keccak256("req1");
+        bytes32 req2 = keccak256("req2");
+        bytes32 req3 = keccak256("req3");
 
-        submitValidationResponse(validator1, request1, 80);
-        submitValidationResponse(validator2, request2, 60);
-        submitValidationResponse(validator1, request3, 90);
+        requestValidation(alice, validator1, agentId, req1);
+        requestValidation(alice, validator2, agentId, req2);
+        requestValidation(alice, validator1, agentId, req3);
+
+        submitValidationResponse(validator1, req1, 80, "security");
+        submitValidationResponse(validator2, req2, 60, "performance");
+        submitValidationResponse(validator1, req3, 90, "security");
 
         address[] memory validators = new address[](0);
-        IERC8004Validation.ValidationSummary memory summary = validationRegistry.getSummary(agentId, validators, "");
+        (uint64 count, uint8 avgResponse) = validationRegistry.getSummary(agentId, validators, "");
 
-        assertEq(summary.totalValidations, 3);
-        assertEq(summary.passedCount, 3); // All >= 50
-        assertEq(summary.failedCount, 0);
-        assertEq(summary.pendingCount, 0);
-        assertEq(summary.averageScore, 76); // (80 + 60 + 90) / 3 = 76
+        assertEq(count, 3);
+        assertEq(avgResponse, 76); // (80 + 60 + 90) / 3
     }
 
     function test_GetSummary_FilterByValidator() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
 
-        bytes32 request1 = requestValidation(bob, validator1, agentId, "security");
-        bytes32 request2 = requestValidation(bob, validator2, agentId, "performance");
-        bytes32 request3 = requestValidation(charlie, validator1, agentId, "security");
+        bytes32 req1 = keccak256("req1");
+        bytes32 req2 = keccak256("req2");
 
-        submitValidationResponse(validator1, request1, 80);
-        submitValidationResponse(validator2, request2, 60);
-        submitValidationResponse(validator1, request3, 90);
+        requestValidation(alice, validator1, agentId, req1);
+        requestValidation(alice, validator2, agentId, req2);
+
+        submitValidationResponse(validator1, req1, 80, "security");
+        submitValidationResponse(validator2, req2, 60, "performance");
 
         address[] memory validators = new address[](1);
         validators[0] = validator1;
-        IERC8004Validation.ValidationSummary memory summary = validationRegistry.getSummary(agentId, validators, "");
+        (uint64 count, uint8 avgResponse) = validationRegistry.getSummary(agentId, validators, "");
 
-        assertEq(summary.totalValidations, 2);
-        assertEq(summary.averageScore, 85); // (80 + 90) / 2
+        assertEq(count, 1);
+        assertEq(avgResponse, 80);
     }
 
     function test_GetSummary_FilterByTag() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
 
-        bytes32 request1 = requestValidation(bob, validator1, agentId, "security");
-        bytes32 request2 = requestValidation(bob, validator2, agentId, "performance");
-        bytes32 request3 = requestValidation(charlie, validator1, agentId, "security");
+        bytes32 req1 = keccak256("req1");
+        bytes32 req2 = keccak256("req2");
+        bytes32 req3 = keccak256("req3");
 
-        submitValidationResponse(validator1, request1, 80);
-        submitValidationResponse(validator2, request2, 60);
-        submitValidationResponse(validator1, request3, 90);
+        requestValidation(alice, validator1, agentId, req1);
+        requestValidation(alice, validator2, agentId, req2);
+        requestValidation(alice, validator1, agentId, req3);
 
-        address[] memory validators = new address[](0);
-        IERC8004Validation.ValidationSummary memory summary =
-            validationRegistry.getSummary(agentId, validators, "security");
-
-        assertEq(summary.totalValidations, 2);
-        assertEq(summary.averageScore, 85); // (80 + 90) / 2
-    }
-
-    function test_GetSummary_PendingValidations() public {
-        uint256 agentId = registerAgent(alice, "ipfs://agent1");
-
-        bytes32 request1 = requestValidation(bob, validator1, agentId, "security");
-        bytes32 request2 = requestValidation(bob, validator2, agentId, "performance");
-
-        // Only respond to one
-        submitValidationResponse(validator1, request1, 80);
+        submitValidationResponse(validator1, req1, 80, "security");
+        submitValidationResponse(validator2, req2, 60, "performance");
+        submitValidationResponse(validator1, req3, 90, "security");
 
         address[] memory validators = new address[](0);
-        IERC8004Validation.ValidationSummary memory summary = validationRegistry.getSummary(agentId, validators, "");
+        (uint64 count, uint8 avgResponse) = validationRegistry.getSummary(agentId, validators, "security");
 
-        assertEq(summary.totalValidations, 2);
-        assertEq(summary.passedCount, 1);
-        assertEq(summary.failedCount, 0);
-        assertEq(summary.pendingCount, 1);
-        assertEq(summary.averageScore, 80); // Only completed validation
+        assertEq(count, 2);
+        assertEq(avgResponse, 85); // (80 + 90) / 2
     }
 
-    function test_GetSummary_PassedFailedCount() public {
+    function test_GetValidatorRequests() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
 
-        bytes32 request1 = requestValidation(bob, validator1, agentId, "security");
-        bytes32 request2 = requestValidation(bob, validator2, agentId, "performance");
-        bytes32 request3 = requestValidation(charlie, validator1, agentId, "security");
+        bytes32 req1 = keccak256("req1");
+        bytes32 req2 = keccak256("req2");
 
-        submitValidationResponse(validator1, request1, 80); // Passed
-        submitValidationResponse(validator2, request2, 30); // Failed
-        submitValidationResponse(validator1, request3, 50); // Passed
+        requestValidation(alice, validator1, agentId, req1);
+        requestValidation(alice, validator1, agentId, req2);
 
-        address[] memory validators = new address[](0);
-        IERC8004Validation.ValidationSummary memory summary = validationRegistry.getSummary(agentId, validators, "");
-
-        assertEq(summary.totalValidations, 3);
-        assertEq(summary.passedCount, 2); // >= 50
-        assertEq(summary.failedCount, 1); // < 50
-        assertEq(summary.pendingCount, 0);
+        bytes32[] memory requests = validationRegistry.getValidatorRequests(validator1);
+        assertEq(requests.length, 2);
+        assertEq(requests[0], req1);
+        assertEq(requests[1], req2);
     }
 
-    function test_GetAllValidations() public {
+    function test_GetAgentValidations() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
 
-        requestValidation(bob, validator1, agentId, "security");
-        requestValidation(bob, validator2, agentId, "performance");
+        bytes32 req1 = keccak256("req1");
+        bytes32 req2 = keccak256("req2");
 
-        IERC8004Validation.ValidationRecord[] memory validations = validationRegistry.getAllValidations(agentId);
+        requestValidation(alice, validator1, agentId, req1);
+        requestValidation(alice, validator2, agentId, req2);
+
+        bytes32[] memory validations = validationRegistry.getAgentValidations(agentId);
         assertEq(validations.length, 2);
     }
 
-    function test_ValidationExists() public {
-        uint256 agentId = registerAgent(alice, "ipfs://agent1");
-        bytes32 requestHash = requestValidation(bob, validator1, agentId, "security");
-
-        assertTrue(validationRegistry.validationExists(requestHash));
-        assertFalse(validationRegistry.validationExists(bytes32(uint256(999))));
-    }
-
-    function test_RevertWhen_GetValidation_NotFound() public {
+    function test_RevertWhen_GetValidationStatus_NotFound() public {
         vm.expectRevert();
-        validationRegistry.getValidation(bytes32(uint256(999)));
+        validationRegistry.getValidationStatus(bytes32(uint256(999)));
     }
 }

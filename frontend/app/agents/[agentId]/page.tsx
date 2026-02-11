@@ -22,7 +22,6 @@ import {
   useAgentExists,
   useAgentURI,
   useAgentMetadata,
-  useFeedbackCount,
   useReputationSummary,
   useAllFeedback,
   useAllValidations,
@@ -45,10 +44,9 @@ export default function AgentDetailPage() {
   const { data: descBytes } = useAgentMetadata(agentId, "description");
   const { data: endpointBytes } = useAgentMetadata(agentId, "endpoint");
   const { data: capabilitiesBytes } = useAgentMetadata(agentId, "capabilities");
-  const { data: feedbackCount } = useFeedbackCount(agentId);
   const { data: summary } = useReputationSummary(agentId);
   const { data: validationCount } = useValidationCount(agentId);
-  const { data: feedbackList } = useAllFeedback(agentId);
+  const { data: feedbackData } = useAllFeedback(agentId);
   const { data: validations } = useAllValidations(agentId);
 
   const decodeMetadata = (bytes: string | undefined) => {
@@ -64,18 +62,37 @@ export default function AgentDetailPage() {
   const ownerStr = owner
     ? `${(owner as string).slice(0, 6)}...${(owner as string).slice(-4)}`
     : "...";
-  const avgRep = summary ? Number(summary.averageValue) : 0;
-  const fCount = feedbackCount ? Number(feedbackCount) : 0;
+
+  // summary returns [count, summaryValue, summaryValueDecimals]
+  const summaryArr = summary as [bigint, bigint, number] | undefined;
+  const fCount = summaryArr ? Number(summaryArr[0]) : 0;
+  const avgRep = summaryArr ? Number(summaryArr[1]) : 0;
   const vCount = validationCount ? Number(validationCount) : 0;
 
   const isOwner =
     address && owner && address.toLowerCase() === (owner as string).toLowerCase();
 
+  // readAllFeedback returns 7 parallel arrays:
+  // [agentIds[], clients[], feedbackIndexes[], values[], valueDecimalsArr[], tag1s[], tag2s[]]
+  const feedbackArrays = feedbackData as
+    | [bigint[], `0x${string}`[], bigint[], bigint[], number[], string[], string[]]
+    | undefined;
+
+  const feedbackList = feedbackArrays && feedbackArrays[0]
+    ? feedbackArrays[0].map((_, i) => ({
+        client: feedbackArrays[1][i],
+        feedbackIndex: feedbackArrays[2][i],
+        value: feedbackArrays[3][i],
+        tag1: feedbackArrays[5][i],
+        tag2: feedbackArrays[6][i],
+      }))
+    : [];
+
   // Feedback form state
   const [fbValue, setFbValue] = useState(0);
   const [fbTag1, setFbTag1] = useState("");
   const [fbTag2, setFbTag2] = useState("");
-  const [fbComment, setFbComment] = useState("");
+  const [fbEndpoint, setFbEndpoint] = useState("");
 
   const {
     write: giveFeedback,
@@ -102,7 +119,7 @@ export default function AgentDetailPage() {
   } = useRevokeFeedback();
 
   const handleFeedbackSubmit = () => {
-    giveFeedback(agentId, BigInt(fbValue), fbTag1, fbTag2, fbComment);
+    giveFeedback(agentId, BigInt(fbValue), fbTag1, fbTag2, fbEndpoint, "");
   };
 
   const handleDeregister = () => {
@@ -289,7 +306,7 @@ export default function AgentDetailPage() {
               </div>
             )}
 
-            {feedbackList && feedbackList.length > 0 ? (
+            {feedbackList.length > 0 ? (
               feedbackList.map((fb, i) => (
                 <div
                   key={i}
@@ -309,8 +326,7 @@ export default function AgentDetailPage() {
                         {Number(fb.value)}
                       </span>
                       {address &&
-                        fb.client.toLowerCase() === address.toLowerCase() &&
-                        !fb.isRevoked && (
+                        fb.client.toLowerCase() === address.toLowerCase() && (
                           <button
                             onClick={() => handleRevoke(BigInt(fb.feedbackIndex))}
                             disabled={revokeBusy}
@@ -327,12 +343,6 @@ export default function AgentDetailPage() {
                         )}
                     </div>
                   </div>
-                  {fb.isRevoked && (
-                    <span className="text-xs text-red-400 italic">Revoked</span>
-                  )}
-                  {fb.comment && (
-                    <p className="text-sm text-foreground">{fb.comment}</p>
-                  )}
                   <div className="flex gap-2 mt-2">
                     {fb.tag1 && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
@@ -357,37 +367,17 @@ export default function AgentDetailPage() {
 
         {tab === "validations" && (
           <div className="space-y-3">
-            {validations && validations.length > 0 ? (
-              validations.map((v, i) => (
+            {validations && (validations as `0x${string}`[]).length > 0 ? (
+              (validations as `0x${string}`[]).map((hash, i) => (
                 <div
                   key={i}
                   className="bg-card/50 border border-border rounded-xl p-5"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">
-                      Validator: {`${v.validatorAddress.slice(0, 6)}...${v.validatorAddress.slice(-4)}`}
-                    </span>
-                    <span
-                      className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                        v.response === 1
-                          ? "bg-green-500/10 text-green-400"
-                          : v.response === 2
-                            ? "bg-red-500/10 text-red-400"
-                            : "bg-yellow-500/10 text-yellow-400"
-                      }`}
-                    >
-                      {v.response === 1
-                        ? "Passed"
-                        : v.response === 2
-                          ? "Failed"
-                          : "Pending"}
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground font-mono break-all">
+                      {hash}
                     </span>
                   </div>
-                  {v.tag && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                      {v.tag}
-                    </span>
-                  )}
                 </div>
               ))
             ) : (
@@ -462,14 +452,14 @@ export default function AgentDetailPage() {
 
               <div>
                 <label className="text-sm font-medium text-foreground mb-2 block">
-                  Comment
+                  Endpoint (Optional)
                 </label>
-                <textarea
-                  placeholder="Share your experience with this agent..."
-                  value={fbComment}
-                  onChange={(e) => setFbComment(e.target.value)}
-                  rows={3}
-                  className="w-full px-4 py-2 rounded-lg bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none text-sm"
+                <input
+                  type="text"
+                  placeholder="e.g., /api/v1/chat"
+                  value={fbEndpoint}
+                  onChange={(e) => setFbEndpoint(e.target.value)}
+                  className="w-full px-4 py-2 rounded-lg bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                 />
               </div>
 

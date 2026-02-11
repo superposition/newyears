@@ -29,19 +29,19 @@ export default function CreatePage() {
   } = useRegisterAgent();
 
   const handleRegister = () => {
-    const metadata: { key: string; value: `0x${string}` }[] = [];
+    const metadata: { metadataKey: string; metadataValue: `0x${string}` }[] = [];
 
     if (formData.name) {
-      metadata.push({ key: "name", value: toHex(formData.name) });
+      metadata.push({ metadataKey: "name", metadataValue: toHex(formData.name) });
     }
     if (formData.description) {
-      metadata.push({ key: "description", value: toHex(formData.description) });
+      metadata.push({ metadataKey: "description", metadataValue: toHex(formData.description) });
     }
     if (formData.capabilities) {
-      metadata.push({ key: "capabilities", value: toHex(formData.capabilities) });
+      metadata.push({ metadataKey: "capabilities", metadataValue: toHex(formData.capabilities) });
     }
     if (formData.endpoint) {
-      metadata.push({ key: "endpoint", value: toHex(formData.endpoint) });
+      metadata.push({ metadataKey: "endpoint", metadataValue: toHex(formData.endpoint) });
     }
 
     registerAgent(formData.uri, metadata);

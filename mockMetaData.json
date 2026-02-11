@@ -1,10 +1,13 @@
 {
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   "name": "ROAX's New Year's AI Agent",
   "description": "An AI agent that scans the landscape for QR codes and opens red packets on the ROAX network.",
   "image": "https://roax.network/images/roax_words.png",
-  "capabilities": ["scanning_landscape", "scanning_qr_codes", "open_red_packet"],
-  "endpoint": "https://agent.roax.net/api/v1",
-  "protocol": "REST",
-  "auth": "bearer",
-  "docs": "https://github.com/superposition/newyears/blob/main/README.md"
+  "services": [
+    { "name": "REST", "endpoint": "https://agent.roax.net/api/v1" }
+  ],
+  "active": true,
+  "registrations": [
+    { "agentId": 0, "agentRegistry": "eip155:135:{identityRegistryAddress}" }
+  ]
 }

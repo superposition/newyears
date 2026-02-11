@@ -7,292 +7,326 @@ import {StakingManager} from "./StakingManager.sol";
 
 /**
  * @title ReputationRegistry
- * @notice Manages feedback and reputation for ERC-8004 agents with automatic slashing
- * @dev Implements structured feedback with revocation, aggregation, and slashing triggers
+ * @notice ERC-8004 spec-compliant reputation registry with PLASMA slashing extension
+ * @dev feedbackIndex is 1-based, per (agentId, clientAddress)
  */
 contract ReputationRegistry is IERC8004Reputation {
-    /// @notice Identity registry contract
     AgentIdentityRegistry public immutable identityRegistry;
-
-    /// @notice Staking manager contract
     StakingManager public immutable stakingManager;
 
-    /// @notice Mapping of agentId to array of feedback entries
-    mapping(uint256 => Feedback[]) private _agentFeedback;
+    /// @notice Feedback storage: agentId => clientAddress => feedbackIndex => Feedback
+    mapping(uint256 => mapping(address => mapping(uint64 => Feedback))) private _feedback;
 
-    /// @notice Mapping of agentId => feedbackIndex => response message
-    mapping(uint256 => mapping(uint64 => string)) private _feedbackResponses;
+    /// @notice Last feedback index per (agentId, clientAddress)
+    mapping(uint256 => mapping(address => uint64)) private _lastIndex;
+
+    /// @notice Client list per agentId (for enumeration)
+    mapping(uint256 => address[]) private _clients;
+    mapping(uint256 => mapping(address => bool)) private _clientExists;
+
+    /// @notice Response tracking: agentId => clientAddress => feedbackIndex => responder => responded
+    mapping(uint256 => mapping(address => mapping(uint64 => mapping(address => bool)))) private _responderExists;
+    /// @notice Count of unique responders per feedback
+    mapping(uint256 => mapping(address => mapping(uint64 => uint64))) private _responseCount;
+
+    int128 private constant MAX_VALUE = 1e38;
+    int128 private constant MIN_VALUE = -1e38;
 
     error AgentNotFound();
     error SelfFeedbackNotAllowed();
     error FeedbackNotFound();
     error Unauthorized();
     error AlreadyRevoked();
-    error EmptyClientList();
+    error ValueOutOfRange();
+    error DecimalsTooHigh();
 
-    /**
-     * @notice Constructor
-     * @param _identityRegistry Address of the identity registry
-     */
     constructor(address _identityRegistry) {
         if (_identityRegistry == address(0)) revert AgentNotFound();
         identityRegistry = AgentIdentityRegistry(_identityRegistry);
         stakingManager = identityRegistry.stakingManager();
     }
 
-    /**
-     * @notice Submit feedback for an agent
-     * @param agentId The agent ID
-     * @param value The feedback value (can be negative)
-     * @param valueDecimals Decimal places for the value
-     * @param tag1 Primary tag for categorization
-     * @param tag2 Secondary tag for categorization
-     * @param comment Optional comment or URI
-     * @return feedbackIndex The index of the submitted feedback
-     */
     function giveFeedback(
         uint256 agentId,
         int128 value,
         uint8 valueDecimals,
         string calldata tag1,
         string calldata tag2,
-        string calldata comment
+        string calldata endpoint,
+        string calldata feedbackURI,
+        bytes32 feedbackHash
     ) external override returns (uint64 feedbackIndex) {
-        // Check agent exists
         if (!identityRegistry.exists(agentId)) revert AgentNotFound();
 
-        // Prevent self-feedback
-        address agentOwner = identityRegistry.ownerOf(agentId);
-        if (msg.sender == agentOwner) revert SelfFeedbackNotAllowed();
+        // Prevent self-feedback (owner, operator, or approved)
+        if (identityRegistry.isAuthorizedOrOwner(msg.sender, agentId)) revert SelfFeedbackNotAllowed();
 
-        // Create feedback entry
-        feedbackIndex = uint64(_agentFeedback[agentId].length);
-        Feedback memory feedback = Feedback({
-            client: msg.sender,
-            agent: agentId,
+        // Validate
+        if (valueDecimals > 18) revert DecimalsTooHigh();
+        if (value > MAX_VALUE || value < MIN_VALUE) revert ValueOutOfRange();
+
+        // Track client
+        if (!_clientExists[agentId][msg.sender]) {
+            _clients[agentId].push(msg.sender);
+            _clientExists[agentId][msg.sender] = true;
+        }
+
+        // 1-based feedbackIndex
+        feedbackIndex = _lastIndex[agentId][msg.sender] + 1;
+        _lastIndex[agentId][msg.sender] = feedbackIndex;
+
+        // Store feedback
+        _feedback[agentId][msg.sender][feedbackIndex] = Feedback({
             value: value,
             valueDecimals: valueDecimals,
-            tag1: tag1,
-            tag2: tag2,
-            comment: comment,
-            timestamp: block.timestamp,
             isRevoked: false,
-            feedbackIndex: feedbackIndex
+            tag1: tag1,
+            tag2: tag2
         });
 
-        _agentFeedback[agentId].push(feedback);
+        emit NewFeedback(agentId, msg.sender, feedbackIndex, value, valueDecimals, tag1, tag1, tag2, endpoint, feedbackURI, feedbackHash);
 
-        emit FeedbackGiven(agentId, msg.sender, feedbackIndex, value, tag1, tag2);
-
-        // Check and potentially slash stake based on new average reputation
         _checkAndSlash(agentId);
     }
 
-    /**
-     * @notice Revoke previously submitted feedback
-     * @param agentId The agent ID
-     * @param feedbackIndex The index of the feedback to revoke
-     */
     function revokeFeedback(uint256 agentId, uint64 feedbackIndex) external override {
-        if (feedbackIndex >= _agentFeedback[agentId].length) revert FeedbackNotFound();
+        if (feedbackIndex == 0 || feedbackIndex > _lastIndex[agentId][msg.sender]) revert FeedbackNotFound();
 
-        Feedback storage feedback = _agentFeedback[agentId][feedbackIndex];
+        Feedback storage fb = _feedback[agentId][msg.sender][feedbackIndex];
+        if (fb.isRevoked) revert AlreadyRevoked();
 
-        // Only original submitter can revoke
-        if (feedback.client != msg.sender) revert Unauthorized();
-        if (feedback.isRevoked) revert AlreadyRevoked();
-
-        feedback.isRevoked = true;
+        fb.isRevoked = true;
 
         emit FeedbackRevoked(agentId, msg.sender, feedbackIndex);
 
-        // Recheck slashing after revocation (reputation might improve)
         _checkAndSlash(agentId);
     }
 
-    /**
-     * @notice Agent owner responds to feedback
-     * @param agentId The agent ID
-     * @param feedbackIndex The feedback index
-     * @param response The response message
-     */
-    function respondToFeedback(uint256 agentId, uint64 feedbackIndex, string calldata response) external override {
-        if (!identityRegistry.exists(agentId)) revert AgentNotFound();
-        if (feedbackIndex >= _agentFeedback[agentId].length) revert FeedbackNotFound();
+    function appendResponse(
+        uint256 agentId,
+        address clientAddress,
+        uint64 feedbackIndex,
+        string calldata responseURI,
+        bytes32 responseHash
+    ) external override {
+        if (feedbackIndex == 0 || feedbackIndex > _lastIndex[agentId][clientAddress]) revert FeedbackNotFound();
 
-        // Only agent owner can respond
-        address agentOwner = identityRegistry.ownerOf(agentId);
-        if (msg.sender != agentOwner) revert Unauthorized();
+        if (!_responderExists[agentId][clientAddress][feedbackIndex][msg.sender]) {
+            _responderExists[agentId][clientAddress][feedbackIndex][msg.sender] = true;
+            _responseCount[agentId][clientAddress][feedbackIndex]++;
+        }
 
-        _feedbackResponses[agentId][feedbackIndex] = response;
-
-        emit FeedbackResponse(agentId, feedbackIndex, response);
+        emit ResponseAppended(agentId, clientAddress, feedbackIndex, msg.sender, responseURI, responseHash);
     }
 
-    /**
-     * @notice Get reputation summary for an agent
-     * @param agentId The agent ID
-     * @param clients Array of client addresses to filter by (empty for all)
-     * @param tag1 Primary tag filter (empty for all)
-     * @param tag2 Secondary tag filter (empty for all)
-     * @return summary The aggregated reputation summary
-     */
-    function getSummary(uint256 agentId, address[] calldata clients, string calldata tag1, string calldata tag2)
+    function getSummary(uint256 agentId, address[] calldata clientAddresses, string calldata tag1, string calldata tag2)
         external
         view
         override
-        returns (ReputationSummary memory summary)
+        returns (uint64 count, int128 summaryValue, uint8 summaryValueDecimals)
     {
-        Feedback[] storage feedbacks = _agentFeedback[agentId];
-
-        // Filter flags
-        bool filterByClient = clients.length > 0;
+        bool filterByClient = clientAddresses.length > 0;
         bool filterByTag1 = bytes(tag1).length > 0;
         bool filterByTag2 = bytes(tag2).length > 0;
 
-        // Aggregate feedback
-        int256 sum = 0;
-        int128 min = type(int128).max;
-        int128 max = type(int128).min;
-        uint256 count = 0;
-        uint8 decimals = 0;
-
-        for (uint256 i = 0; i < feedbacks.length; i++) {
-            Feedback storage fb = feedbacks[i];
-
-            // Skip revoked feedback
-            if (fb.isRevoked) continue;
-
-            // Apply client filter
-            if (filterByClient) {
-                bool matchesClient = false;
-                for (uint256 j = 0; j < clients.length; j++) {
-                    if (fb.client == clients[j]) {
-                        matchesClient = true;
-                        break;
-                    }
-                }
-                if (!matchesClient) continue;
-            }
-
-            // Apply tag filters
-            if (filterByTag1 && keccak256(bytes(fb.tag1)) != keccak256(bytes(tag1))) continue;
-            if (filterByTag2 && keccak256(bytes(fb.tag2)) != keccak256(bytes(tag2))) continue;
-
-            // Accumulate
-            sum += int256(fb.value);
-            if (fb.value < min) min = fb.value;
-            if (fb.value > max) max = fb.value;
-            count++;
-
-            // Use first feedback's decimals as reference
-            if (count == 1) decimals = fb.valueDecimals;
+        // Determine which clients to iterate
+        address[] memory clients;
+        if (filterByClient) {
+            clients = clientAddresses;
+        } else {
+            clients = _clients[agentId];
         }
 
-        // Compute average
-        int128 average = count > 0 ? int128(sum / int256(count)) : int128(0);
+        // First pass: find mode decimals and count
+        uint256[19] memory decimalCounts;
+        uint256 totalCount = 0;
 
-        summary = ReputationSummary({
-            agentId: agentId,
-            totalCount: count,
-            averageValue: average,
-            valueDecimals: decimals,
-            minValue: count > 0 ? min : int128(0),
-            maxValue: count > 0 ? max : int128(0)
-        });
+        for (uint256 c = 0; c < clients.length; c++) {
+            address client = clients[c];
+            uint64 last = _lastIndex[agentId][client];
+            for (uint64 i = 1; i <= last; i++) {
+                Feedback storage fb = _feedback[agentId][client][i];
+                if (fb.isRevoked) continue;
+                if (filterByTag1 && keccak256(bytes(fb.tag1)) != keccak256(bytes(tag1))) continue;
+                if (filterByTag2 && keccak256(bytes(fb.tag2)) != keccak256(bytes(tag2))) continue;
+                decimalCounts[fb.valueDecimals]++;
+                totalCount++;
+            }
+        }
+
+        if (totalCount == 0) return (0, 0, 0);
+
+        // Find mode decimals
+        uint8 modeDecimals = 0;
+        uint256 maxCount = 0;
+        for (uint8 d = 0; d <= 18; d++) {
+            if (decimalCounts[d] > maxCount) {
+                maxCount = decimalCounts[d];
+                modeDecimals = d;
+            }
+        }
+
+        // WAD normalization: normalize all to 18 decimals, sum, average, scale back
+        int256 wadSum = 0;
+        for (uint256 c = 0; c < clients.length; c++) {
+            address client = clients[c];
+            uint64 last = _lastIndex[agentId][client];
+            for (uint64 i = 1; i <= last; i++) {
+                Feedback storage fb = _feedback[agentId][client][i];
+                if (fb.isRevoked) continue;
+                if (filterByTag1 && keccak256(bytes(fb.tag1)) != keccak256(bytes(tag1))) continue;
+                if (filterByTag2 && keccak256(bytes(fb.tag2)) != keccak256(bytes(tag2))) continue;
+                // Normalize to 18 decimals
+                int256 wadValue = int256(fb.value) * int256(10 ** (18 - fb.valueDecimals));
+                wadSum += wadValue;
+            }
+        }
+
+        // Average at WAD precision, then scale to mode decimals
+        int256 wadAverage = wadSum / int256(totalCount);
+        int256 scaledAverage = wadAverage / int256(10 ** (18 - modeDecimals));
+
+        count = uint64(totalCount);
+        summaryValue = int128(scaledAverage);
+        summaryValueDecimals = modeDecimals;
     }
 
-    /**
-     * @notice Get specific feedback entry
-     * @param agentId The agent ID
-     * @param feedbackIndex The feedback index
-     * @return The feedback entry
-     */
-    function getFeedback(uint256 agentId, uint64 feedbackIndex) external view override returns (Feedback memory) {
-        if (feedbackIndex >= _agentFeedback[agentId].length) revert FeedbackNotFound();
-        return _agentFeedback[agentId][feedbackIndex];
-    }
-
-    /**
-     * @notice Get all feedback for an agent
-     * @param agentId The agent ID
-     * @param includeRevoked Whether to include revoked feedback
-     * @return Array of feedback entries
-     */
-    function getAllFeedback(uint256 agentId, bool includeRevoked)
+    function readFeedback(uint256 agentId, address clientAddress, uint64 feedbackIndex)
         external
         view
         override
-        returns (Feedback[] memory)
+        returns (int128 value, uint8 valueDecimals, string memory tag1, string memory tag2, bool isRevoked)
     {
-        Feedback[] storage feedbacks = _agentFeedback[agentId];
+        if (feedbackIndex == 0 || feedbackIndex > _lastIndex[agentId][clientAddress]) revert FeedbackNotFound();
+        Feedback storage fb = _feedback[agentId][clientAddress][feedbackIndex];
+        return (fb.value, fb.valueDecimals, fb.tag1, fb.tag2, fb.isRevoked);
+    }
 
-        if (includeRevoked) {
-            return feedbacks;
+    function readAllFeedback(
+        uint256 agentId,
+        address[] calldata clientAddresses,
+        string calldata tag1,
+        string calldata tag2,
+        bool includeRevoked
+    )
+        external
+        view
+        override
+        returns (
+            uint256[] memory agentIds,
+            address[] memory clients,
+            uint64[] memory feedbackIndexes,
+            int128[] memory values,
+            uint8[] memory valueDecimalsArr,
+            string[] memory tag1s,
+            string[] memory tag2s
+        )
+    {
+        bool filterByClient = clientAddresses.length > 0;
+        bool filterByTag1 = bytes(tag1).length > 0;
+        bool filterByTag2 = bytes(tag2).length > 0;
+
+        address[] memory clientList;
+        if (filterByClient) {
+            clientList = clientAddresses;
+        } else {
+            clientList = _clients[agentId];
         }
 
-        // Count non-revoked
-        uint256 count = 0;
-        for (uint256 i = 0; i < feedbacks.length; i++) {
-            if (!feedbacks[i].isRevoked) count++;
-        }
-
-        // Build result array
-        Feedback[] memory result = new Feedback[](count);
-        uint256 index = 0;
-        for (uint256 i = 0; i < feedbacks.length; i++) {
-            if (!feedbacks[i].isRevoked) {
-                result[index++] = feedbacks[i];
+        // Count matching entries
+        uint256 total = 0;
+        for (uint256 c = 0; c < clientList.length; c++) {
+            uint64 last = _lastIndex[agentId][clientList[c]];
+            for (uint64 i = 1; i <= last; i++) {
+                Feedback storage fb = _feedback[agentId][clientList[c]][i];
+                if (!includeRevoked && fb.isRevoked) continue;
+                if (filterByTag1 && keccak256(bytes(fb.tag1)) != keccak256(bytes(tag1))) continue;
+                if (filterByTag2 && keccak256(bytes(fb.tag2)) != keccak256(bytes(tag2))) continue;
+                total++;
             }
         }
 
-        return result;
+        agentIds = new uint256[](total);
+        clients = new address[](total);
+        feedbackIndexes = new uint64[](total);
+        values = new int128[](total);
+        valueDecimalsArr = new uint8[](total);
+        tag1s = new string[](total);
+        tag2s = new string[](total);
+
+        uint256 idx = 0;
+        for (uint256 c = 0; c < clientList.length; c++) {
+            address client = clientList[c];
+            uint64 last = _lastIndex[agentId][client];
+            for (uint64 i = 1; i <= last; i++) {
+                Feedback storage fb = _feedback[agentId][client][i];
+                if (!includeRevoked && fb.isRevoked) continue;
+                if (filterByTag1 && keccak256(bytes(fb.tag1)) != keccak256(bytes(tag1))) continue;
+                if (filterByTag2 && keccak256(bytes(fb.tag2)) != keccak256(bytes(tag2))) continue;
+                agentIds[idx] = agentId;
+                clients[idx] = client;
+                feedbackIndexes[idx] = i;
+                values[idx] = fb.value;
+                valueDecimalsArr[idx] = fb.valueDecimals;
+                tag1s[idx] = fb.tag1;
+                tag2s[idx] = fb.tag2;
+                idx++;
+            }
+        }
     }
 
-    /**
-     * @notice Get total number of feedback entries for an agent
-     * @param agentId The agent ID
-     * @return Total feedback count
-     */
-    function getFeedbackCount(uint256 agentId) external view override returns (uint256) {
-        return _agentFeedback[agentId].length;
+    function getResponseCount(
+        uint256 agentId,
+        address clientAddress,
+        uint64 feedbackIndex,
+        address[] calldata responders
+    ) external view override returns (uint64) {
+        if (responders.length == 0) {
+            return _responseCount[agentId][clientAddress][feedbackIndex];
+        }
+        uint64 cnt = 0;
+        for (uint256 i = 0; i < responders.length; i++) {
+            if (_responderExists[agentId][clientAddress][feedbackIndex][responders[i]]) {
+                cnt++;
+            }
+        }
+        return cnt;
     }
 
-    /**
-     * @notice Get feedback response from agent owner
-     * @param agentId The agent ID
-     * @param feedbackIndex The feedback index
-     * @return The response message
-     */
-    function getFeedbackResponse(uint256 agentId, uint64 feedbackIndex) external view returns (string memory) {
-        return _feedbackResponses[agentId][feedbackIndex];
+    function getClients(uint256 agentId) external view override returns (address[] memory) {
+        return _clients[agentId];
     }
 
-    /**
-     * @dev Internal function to check reputation and trigger slashing
-     * @param agentId The agent ID to check
-     */
+    function getLastIndex(uint256 agentId, address clientAddress) external view override returns (uint64) {
+        return _lastIndex[agentId][clientAddress];
+    }
+
+    function getIdentityRegistry() external view override returns (address) {
+        return address(identityRegistry);
+    }
+
+    // ── PLASMA Slashing Extension ──
+
     function _checkAndSlash(uint256 agentId) internal {
-        Feedback[] storage feedbacks = _agentFeedback[agentId];
+        address[] memory clients = _clients[agentId];
 
-        // Count non-revoked feedback
-        uint256 count = 0;
+        uint256 nonRevokedCount = 0;
         int256 sum = 0;
 
-        for (uint256 i = 0; i < feedbacks.length; i++) {
-            if (!feedbacks[i].isRevoked) {
-                sum += int256(feedbacks[i].value);
-                count++;
+        for (uint256 c = 0; c < clients.length; c++) {
+            uint64 last = _lastIndex[agentId][clients[c]];
+            for (uint64 i = 1; i <= last; i++) {
+                Feedback storage fb = _feedback[agentId][clients[c]][i];
+                if (!fb.isRevoked) {
+                    sum += int256(fb.value);
+                    nonRevokedCount++;
+                }
             }
         }
 
-        // Only trigger slashing check if there's enough feedback
-        if (count >= 5) {
-            // Compute average (scale to 1e18 for precision)
-            int256 average = (sum * 1e18) / int256(count);
-
-            // Call staking manager to check and slash
-            stakingManager.checkAndSlash(agentId, average, count);
+        if (nonRevokedCount >= 5) {
+            int256 average = (sum * 1e18) / int256(nonRevokedCount);
+            stakingManager.checkAndSlash(agentId, average, nonRevokedCount);
         }
     }
 }

@@ -6,150 +6,141 @@ import {AgentIdentityRegistry} from "./AgentIdentityRegistry.sol";
 
 /**
  * @title ValidationRegistry
- * @notice Manages validation requests and responses for ERC-8004 agents
- * @dev Request/response model with score tracking and aggregation
+ * @notice ERC-8004 spec-compliant validation registry
+ * @dev Caller-provided requestHash, response 0-100 with hasResponse flag, tag in response only
  */
 contract ValidationRegistry is IERC8004Validation {
-    /// @notice Identity registry contract
     AgentIdentityRegistry public immutable identityRegistry;
 
-    /// @notice Mapping of requestHash to ValidationRecord
-    mapping(bytes32 => ValidationRecord) private _validations;
+    /// @notice Validation status by requestHash
+    mapping(bytes32 => ValidationStatus) private _validations;
 
-    /// @notice Mapping of agentId to array of request hashes
+    /// @notice Agent validations tracking
     mapping(uint256 => bytes32[]) private _agentValidations;
+    mapping(uint256 => mapping(bytes32 => bool)) private _agentValidationExists;
+
+    /// @notice Validator request tracking
+    mapping(address => bytes32[]) private _validatorRequests;
+    mapping(address => mapping(bytes32 => bool)) private _validatorRequestExists;
 
     error AgentNotFound();
+    error NotAuthorized();
     error ValidationNotFound();
     error ValidationAlreadyExists();
-    error Unauthorized();
     error InvalidResponse();
 
-    /**
-     * @notice Constructor
-     * @param _identityRegistry Address of the identity registry
-     */
     constructor(address _identityRegistry) {
         if (_identityRegistry == address(0)) revert AgentNotFound();
         identityRegistry = AgentIdentityRegistry(_identityRegistry);
     }
 
-    /**
-     * @notice Request validation for an agent
-     * @param validator Address of the validator to request from
-     * @param agentId Agent ID to validate
-     * @param uri URI with validation criteria or details
-     * @param uriHash Hash of the validation criteria
-     * @param tag Tag for categorization
-     * @return requestHash Unique hash identifying this validation request
-     */
     function validationRequest(
-        address validator,
+        address validatorAddress,
         uint256 agentId,
-        string calldata uri,
-        bytes32 uriHash,
-        string calldata tag
-    ) external override returns (bytes32 requestHash) {
-        // Check agent exists
+        string calldata requestURI,
+        bytes32 requestHash
+    ) external override {
         if (!identityRegistry.exists(agentId)) revert AgentNotFound();
 
-        // Generate unique request hash
-        requestHash = keccak256(abi.encodePacked(msg.sender, validator, agentId, uriHash, block.timestamp));
+        // Only owner/operator of agentId can request validation
+        if (!identityRegistry.isAuthorizedOrOwner(msg.sender, agentId)) revert NotAuthorized();
 
         // Check for duplicate
         if (_validations[requestHash].lastUpdate != 0) revert ValidationAlreadyExists();
 
-        // Create validation record
-        ValidationRecord memory record = ValidationRecord({
-            requestor: msg.sender,
-            validatorAddress: validator,
+        _validations[requestHash] = ValidationStatus({
+            validatorAddress: validatorAddress,
             agentId: agentId,
-            uri: uri,
-            uriHash: uriHash,
-            tag: tag,
-            response: 0, // 0 means pending
+            response: 0,
             responseHash: bytes32(0),
-            lastUpdate: block.timestamp
+            tag: "",
+            lastUpdate: block.timestamp,
+            hasResponse: false
         });
 
-        _validations[requestHash] = record;
-        _agentValidations[agentId].push(requestHash);
+        // Track for agent
+        if (!_agentValidationExists[agentId][requestHash]) {
+            _agentValidations[agentId].push(requestHash);
+            _agentValidationExists[agentId][requestHash] = true;
+        }
 
-        emit ValidationRequested(requestHash, msg.sender, validator, agentId, tag);
+        // Track for validator
+        if (!_validatorRequestExists[validatorAddress][requestHash]) {
+            _validatorRequests[validatorAddress].push(requestHash);
+            _validatorRequestExists[validatorAddress][requestHash] = true;
+        }
+
+        emit ValidationRequest(validatorAddress, agentId, requestURI, requestHash);
     }
 
-    /**
-     * @notice Validator submits a validation response
-     * @param requestHash The validation request hash
-     * @param response Validation score (1-100, where 0 is invalid)
-     * @param responseUri URI with detailed validation report
-     * @param responseHash Hash of the validation response
-     */
     function validationResponse(
         bytes32 requestHash,
         uint8 response,
-        string calldata responseUri,
-        bytes32 responseHash
+        string calldata responseURI,
+        bytes32 responseHash,
+        string calldata tag
     ) external override {
-        ValidationRecord storage record = _validations[requestHash];
-
-        // Check validation exists
+        ValidationStatus storage record = _validations[requestHash];
         if (record.lastUpdate == 0) revert ValidationNotFound();
 
         // Only assigned validator can respond
-        if (msg.sender != record.validatorAddress) revert Unauthorized();
+        if (msg.sender != record.validatorAddress) revert NotAuthorized();
 
-        // Response must be between 1-100 (0 is reserved for pending)
-        if (response == 0 || response > 100) revert InvalidResponse();
+        // Response range: 0-100 (0 is valid per spec, hasResponse differentiates from pending)
+        if (response > 100) revert InvalidResponse();
 
-        // Update record
         record.response = response;
         record.responseHash = responseHash;
+        record.tag = tag;
         record.lastUpdate = block.timestamp;
+        record.hasResponse = true;
 
-        // Update URI if provided
-        if (bytes(responseUri).length > 0) {
-            record.uri = responseUri;
-        }
-
-        emit ValidationResponse(requestHash, msg.sender, record.agentId, response);
+        emit ValidationResponse(msg.sender, record.agentId, requestHash, response, responseURI, responseHash, tag);
     }
 
-    /**
-     * @notice Get validation summary for an agent
-     * @param agentId The agent ID
-     * @param validators Array of validator addresses to filter by (empty for all)
-     * @param tag Tag filter (empty for all)
-     * @return summary The aggregated validation summary
-     */
-    function getSummary(uint256 agentId, address[] calldata validators, string calldata tag)
+    function getValidationStatus(bytes32 requestHash)
         external
         view
         override
-        returns (ValidationSummary memory summary)
+        returns (address, uint256, uint8, bytes32, string memory, uint256)
+    {
+        ValidationStatus storage record = _validations[requestHash];
+        if (record.lastUpdate == 0) revert ValidationNotFound();
+        return (
+            record.validatorAddress,
+            record.agentId,
+            record.response,
+            record.responseHash,
+            record.tag,
+            record.lastUpdate
+        );
+    }
+
+    function getSummary(uint256 agentId, address[] calldata validatorAddresses, string calldata tag)
+        external
+        view
+        override
+        returns (uint64 count, uint8 averageResponse)
     {
         bytes32[] storage requestHashes = _agentValidations[agentId];
 
-        // Filter flags
-        bool filterByValidator = validators.length > 0;
+        bool filterByValidator = validatorAddresses.length > 0;
         bool filterByTag = bytes(tag).length > 0;
 
-        // Aggregate validations
         uint256 totalCount = 0;
-        uint256 passedCount = 0;
-        uint256 failedCount = 0;
-        uint256 pendingCount = 0;
         uint256 scoreSum = 0;
-        uint256 scoredCount = 0;
 
         for (uint256 i = 0; i < requestHashes.length; i++) {
-            ValidationRecord storage record = _validations[requestHashes[i]];
+            ValidationStatus storage record = _validations[requestHashes[i]];
+
+            // Only count responded validations
+            if (!record.hasResponse) continue;
 
             // Apply validator filter
             if (filterByValidator) {
                 bool matchesValidator = false;
-                for (uint256 j = 0; j < validators.length; j++) {
-                    if (record.validatorAddress == validators[j]) {
+                for (uint256 j = 0; j < validatorAddresses.length; j++) {
+                    if (record.validatorAddress == validatorAddresses[j]) {
                         matchesValidator = true;
                         break;
                     }
@@ -161,75 +152,18 @@ contract ValidationRegistry is IERC8004Validation {
             if (filterByTag && keccak256(bytes(record.tag)) != keccak256(bytes(tag))) continue;
 
             totalCount++;
-
-            if (record.response == 0) {
-                pendingCount++;
-            } else if (record.response >= 50) {
-                passedCount++;
-                scoreSum += record.response;
-                scoredCount++;
-            } else {
-                failedCount++;
-                scoreSum += record.response;
-                scoredCount++;
-            }
+            scoreSum += record.response;
         }
 
-        // Compute average score (excluding pending)
-        uint256 averageScore = scoredCount > 0 ? scoreSum / scoredCount : 0;
-
-        summary = ValidationSummary({
-            agentId: agentId,
-            totalValidations: totalCount,
-            passedCount: passedCount,
-            failedCount: failedCount,
-            pendingCount: pendingCount,
-            averageScore: averageScore
-        });
+        count = uint64(totalCount);
+        averageResponse = totalCount > 0 ? uint8(scoreSum / totalCount) : 0;
     }
 
-    /**
-     * @notice Get specific validation record
-     * @param requestHash The validation request hash
-     * @return The validation record
-     */
-    function getValidation(bytes32 requestHash) external view override returns (ValidationRecord memory) {
-        ValidationRecord storage record = _validations[requestHash];
-        if (record.lastUpdate == 0) revert ValidationNotFound();
-        return record;
+    function getAgentValidations(uint256 agentId) external view override returns (bytes32[] memory) {
+        return _agentValidations[agentId];
     }
 
-    /**
-     * @notice Get all validations for an agent
-     * @param agentId The agent ID
-     * @return Array of validation records
-     */
-    function getAllValidations(uint256 agentId) external view override returns (ValidationRecord[] memory) {
-        bytes32[] storage requestHashes = _agentValidations[agentId];
-        ValidationRecord[] memory records = new ValidationRecord[](requestHashes.length);
-
-        for (uint256 i = 0; i < requestHashes.length; i++) {
-            records[i] = _validations[requestHashes[i]];
-        }
-
-        return records;
-    }
-
-    /**
-     * @notice Get total number of validations for an agent
-     * @param agentId The agent ID
-     * @return Total validation count
-     */
-    function getValidationCount(uint256 agentId) external view override returns (uint256) {
-        return _agentValidations[agentId].length;
-    }
-
-    /**
-     * @notice Check if a validation exists
-     * @param requestHash The validation request hash
-     * @return True if the validation exists
-     */
-    function validationExists(bytes32 requestHash) external view override returns (bool) {
-        return _validations[requestHash].lastUpdate != 0;
+    function getValidatorRequests(address validatorAddress) external view override returns (bytes32[] memory) {
+        return _validatorRequests[validatorAddress];
     }
 }
