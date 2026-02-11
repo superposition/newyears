@@ -1,6 +1,6 @@
 export const CONTRACTS = {
-  agentIdentityRegistry: "0x646306682cD4AB18007c6b7B4AA54Aa0731d49A8" as `0x${string}`,
-  reputationRegistry: "0x8d66B496FdaA46c3885b6A485E36e4291fCc969F" as `0x${string}`,
-  validationRegistry: "0xa95062757f6A17682Fe70B00Ed7b485D4767E0cd" as `0x${string}`,
-  stakingManager: "0xd76F626334BE6970ac0F3C5A25bBe4A8eF07F6cc" as `0x${string}`,
+  agentIdentityRegistry: "0xc6cdA43A7D8F3bBf6B298DC25D3029BfFf5b2f7F" as `0x${string}`,
+  reputationRegistry: "0xa489899C37c3E7E61bE89367Ad8fb0795cC5a32b" as `0x${string}`,
+  validationRegistry: "0xFc3529a65720f865b344abf2dDdC94878A59648E" as `0x${string}`,
+  stakingManager: "0x9BebeA6ebde07C0Ce5c10f9f8Af0Cf323bB45a20" as `0x${string}`,
 } as const;

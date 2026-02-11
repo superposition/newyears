@@ -28,11 +28,13 @@ The ERC-8004 Trustless Agents frontend is **fully built and ready for deployment
    - Links to detail pages
 
 4. **Agent Detail Page** (`/agents/[agentId]`)
-   - Complete agent information
-   - Owner identification
-   - Reputation dashboard (count, average, min, max)
-   - Give feedback form (score slider, tags, comment)
-   - Non-owner feedback restriction
+   - Complete agent information with metadata display
+   - Owner identification and agent wallet
+   - Reputation dashboard (count, average — WAD normalized)
+   - Give feedback form (score slider, tags, endpoint)
+   - Feedback list from `readAllFeedback` (7 parallel arrays)
+   - Revoke own feedback
+   - Validation hashes display
 
 ### 🛠️ Tech Stack
 
@@ -99,12 +101,11 @@ cat ../deployments-135.json
 Update `lib/contracts/addresses.ts`:
 
 ```typescript
-export const contractAddresses = {
-  plasmaToken: '0xYourPlasmaTokenAddress',
-  stakingManager: '0xYourStakingManagerAddress',
-  identityRegistry: '0xYourIdentityRegistryAddress',
-  reputationRegistry: '0xYourReputationRegistryAddress',
-  validationRegistry: '0xYourValidationRegistryAddress',
+export const CONTRACTS = {
+  agentIdentityRegistry: "0xc6cdA43A7D8F3bBf6B298DC25D3029BfFf5b2f7F" as `0x${string}`,
+  reputationRegistry: "0xa489899C37c3E7E61bE89367Ad8fb0795cC5a32b" as `0x${string}`,
+  validationRegistry: "0xFc3529a65720f865b344abf2dDdC94878A59648E" as `0x${string}`,
+  stakingManager: "0x9BebeA6ebde07C0Ce5c10f9f8Af0Cf323bB45a20" as `0x${string}`,
 } as const;
 ```
 
@@ -294,13 +295,13 @@ RainbowKit will automatically prompt users to add the ROAX network to their wall
    - Click an agent card
 
 4. **Agent Detail & Feedback**
-   - Verify agent information displays
-   - Check reputation summary (0 reviews initially)
-   - If not owner: Submit feedback
-   - Adjust score slider (-100 to 100)
-   - Add tags and comment
+   - Verify agent information displays (name, description, endpoint, capabilities)
+   - Check reputation summary (count, average — 0 initially)
+   - If not owner/operator: Submit feedback with score slider (-100 to 100), tags, and endpoint
    - Submit feedback transaction
-   - Verify reputation updates
+   - Verify reputation updates and feedback list
+   - Revoke your own feedback
+   - View validation request hashes
 
 ## 📊 Build Output
 

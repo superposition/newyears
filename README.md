@@ -1,6 +1,6 @@
 # ERC-8004 Trustless Agents Implementation on ROAX
 
-A complete implementation of [ERC-8004 (Trustless Agents)](https://eips.ethereum.org/EIPS/eip-8004) on the ROAX blockchain with native PLASMA staking requirements. ERC-8004 provides on-chain identity, reputation, and validation registries for AI agents to interact trustlessly across organizational boundaries.
+A spec-compliant implementation of [ERC-8004 (Trustless Agents)](https://eips.ethereum.org/EIPS/eip-8004) on the ROAX blockchain with native PLASMA staking extensions. ERC-8004 provides on-chain identity, reputation, and validation registries for AI agents to interact trustlessly across organizational boundaries.
 
 ## Overview
 
@@ -77,48 +77,60 @@ ERC-8004 enables AI agents to:
 
 ## Key Features
 
-### 1. Agent Identity (ERC-721)
+### 1. Agent Identity (ERC-721) — Spec Compliant
 
-- Each agent is represented as an ERC-721 NFT
-- Supports metadata storage (key-value pairs)
-- Agent wallet verification via EIP-712 signatures
-- Automatic wallet clearing on NFT transfer
-- Enumerable for efficient agent discovery
+- Each agent is represented as an ERC-721 NFT with ERC721Enumerable
+- **3 registration overloads**: `register()`, `register(uri)`, `register(uri, metadata)` — all payable for PLASMA staking
+- Metadata storage with `metadataKey`/`metadataValue` fields (per spec)
+- **Agent wallet** stored as metadata under reserved `"agentWallet"` key (auto-set to `msg.sender` on registration)
+- Agent wallet verification via EIP-712 signatures (typehash includes `owner`, 5-minute deadline cap)
+- `unsetAgentWallet()` to clear the agent wallet
+- `isAuthorizedOrOwner()` — owner, approved operator, or `getApproved` can manage agents
+- Automatic wallet clearing on NFT transfer with `MetadataSet` event
+- Spec events: `Registered`, `MetadataSet`, `URIUpdated`
 
-### 2. Native PLASMA Staking
+### 2. Native PLASMA Staking (Custom Extension)
 
-- **Registration**: Send 0.1 PLASMA with the `register()` call (no separate approval needed)
+- **Registration**: Send 0.1 PLASMA with any `register()` overload (no separate approval needed)
 - **Slashing**: Automatic 50% slash if average reputation < -50 (with >= 5 reviews)
-- **Refund**: Remaining stake returned on agent deregistration
+- **Refund**: Remaining stake returned on agent deregistration via `deregister()`
 - **Security**: ReentrancyGuard protection on all operations
 
-### 3. Reputation System
+### 3. Reputation System — Spec Compliant
 
-- **Structured Feedback**: int128 value with configurable decimals (supports percentages, scores, monetary amounts)
-- **Tag-Based Filtering**: Two-level tagging for contextual reputation (e.g., "speed"/"fast", "quality"/"excellent")
-- **Revocation**: Feedback submitters can revoke their feedback
-- **Response Mechanism**: Agent owners can respond to feedback
-- **Aggregation**: Average, min, max reputation with client/tag filtering
-- **Self-Feedback Prevention**: Agent owners cannot rate their own agents
-- **Automatic Slashing**: Triggers stake slashing on bad reputation
+- **8-param `giveFeedback`**: agentId, value, valueDecimals, tag1, tag2, endpoint, feedbackURI, feedbackHash
+- **1-based feedbackIndex** per (agentId, clientAddress) — each client has independent indexing
+- **Value validation**: `valueDecimals` 0-18, value in `[-1e38, 1e38]`
+- **Tag-Based Filtering**: Two-level tagging for contextual reputation
+- **Revocation**: Only the original client can revoke their own feedback (by feedbackIndex)
+- **`appendResponse`**: Anyone can respond to feedback (tracked per unique responder)
+- **WAD normalization in `getSummary`**: Normalizes all values to 18 decimals, averages, then scales back to mode decimals
+- **`readAllFeedback`**: Returns 7 parallel arrays with client/tag filtering
+- **Client enumeration**: `getClients()`, `getLastIndex()`, `getResponseCount()`
+- **Self-Feedback Prevention**: Uses `isAuthorizedOrOwner` — owner, operators, and approved addresses all blocked
+- **Automatic Slashing**: Triggers PLASMA stake slashing on bad reputation (custom extension)
+- Spec events: `NewFeedback`, `FeedbackRevoked`, `ResponseAppended`
 
-### 4. Validation Registry
+### 4. Validation Registry — Spec Compliant
 
-- **Request/Response Model**: Requestors initiate validation, validators respond
-- **Score Range**: 1-100, where 0 is reserved for pending validations
-- **Pass/Fail Tracking**: Scores >= 50 = passed, < 50 = failed
-- **Tag Categorization**: Validation types (security, performance, etc.)
-- **Summary Aggregation**: Filter by validator and tag
+- **Caller-provided `requestHash`**: The caller computes and provides the hash (not derived on-chain)
+- **Owner-only requests**: Only owner/operator of the agentId can request validation (via `isAuthorizedOrOwner`)
+- **Response range 0-100**: 0 is a valid score (not reserved for pending); `hasResponse` flag differentiates
+- **Tag in response only**: Tag is set during `validationResponse`, not during request
+- **Progressive updates**: Validators can update their response multiple times
+- **`getAgentValidations(agentId)`** and **`getValidatorRequests(validatorAddress)`** for enumeration
+- **`getSummary`** returns `(count, averageResponse)` — only counts responded validations
+- Spec events: `ValidationRequest`, `ValidationResponse`
 
 ## Contract Addresses (ROAX Devnet)
 
 Deployed on ROAX network (chainID 135):
 
 ```
-StakingManager:         0xd76F626334BE6970ac0F3C5A25bBe4A8eF07F6cc
-AgentIdentityRegistry:  0x646306682cD4AB18007c6b7B4AA54Aa0731d49A8
-ReputationRegistry:     0x8d66B496FdaA46c3885b6A485E36e4291fCc969F
-ValidationRegistry:     0xa95062757f6A17682Fe70B00Ed7b485D4767E0cd
+StakingManager:         0x9BebeA6ebde07C0Ce5c10f9f8Af0Cf323bB45a20
+AgentIdentityRegistry:  0xc6cdA43A7D8F3bBf6B298DC25D3029BfFf5b2f7F
+ReputationRegistry:     0xa489899C37c3E7E61bE89367Ad8fb0795cC5a32b
+ValidationRegistry:     0xFc3529a65720f865b344abf2dDdC94878A59648E
 ```
 
 ## Frontend
@@ -137,10 +149,11 @@ pnpm dev       # starts on http://localhost:3000
 
 - **Browse Agents**: View all registered agents with reputation summaries
 - **Register Agent**: Connect wallet, fill in metadata, stake 0.1 PLASMA to mint an agent NFT
-- **Give Feedback**: Rate agents (-100 to +100) with tags and comments
+- **Give Feedback**: Rate agents (-100 to +100) with tags and endpoint
 - **Revoke Feedback**: Revoke your own previously submitted feedback
+- **Append Response**: Respond to any feedback entry
 - **Deregister Agent**: Owner-only action to burn the agent NFT and reclaim stake
-- **Leaderboard**: View agents ranked by reputation
+- **Leaderboard**: View agents ranked by reputation (WAD-normalized averages)
 
 ### Tech Stack
 
@@ -230,73 +243,98 @@ forge test --gas-report
 ### Registering an Agent
 
 ```solidity
-// Prepare metadata
+// Option 1: Bare registration (no URI, no metadata)
+uint256 agentId = identityRegistry.register{value: 0.1 ether}();
+
+// Option 2: URI-only registration
+uint256 agentId = identityRegistry.register{value: 0.1 ether}("ipfs://agent-metadata-uri");
+
+// Option 3: Full registration with metadata
 IERC8004Identity.MetadataEntry[] memory metadata = new IERC8004Identity.MetadataEntry[](1);
 metadata[0] = IERC8004Identity.MetadataEntry({
-    key: "name",
-    value: abi.encode("My AI Agent")
+    metadataKey: "name",
+    metadataValue: abi.encode("My AI Agent")
 });
-
-// Register agent — sends 0.1 PLASMA as native value
 uint256 agentId = identityRegistry.register{value: 0.1 ether}(
     "ipfs://agent-metadata-uri",
     metadata
 );
+
+// Agent wallet is automatically set to msg.sender
+address wallet = identityRegistry.getAgentWallet(agentId); // == msg.sender
 ```
 
 ### Submitting Feedback
 
 ```solidity
-// Give feedback (value: -100 to 100, decimals: 0 for integers)
+// Give feedback (8 params per spec)
 uint64 feedbackIndex = reputationRegistry.giveFeedback(
     agentId,
-    80,          // value
-    0,           // decimals
-    "quality",   // tag1
-    "excellent", // tag2
-    "Great work!" // comment
+    80,              // value (int128, range [-1e38, 1e38])
+    0,               // valueDecimals (0-18)
+    "quality",       // tag1
+    "excellent",     // tag2
+    "/api/v1/chat",  // endpoint (emit-only)
+    "",              // feedbackURI (emit-only)
+    bytes32(0)       // feedbackHash (emit-only)
 );
 
-// Revoke feedback (only original submitter)
+// feedbackIndex is 1-based, per (agentId, msg.sender)
+// Revoke feedback (only original submitter can revoke their own)
 reputationRegistry.revokeFeedback(agentId, feedbackIndex);
+
+// Anyone can respond to feedback
+reputationRegistry.appendResponse(agentId, clientAddress, feedbackIndex, "ipfs://response", bytes32(0));
 ```
 
 ### Requesting Validation
 
 ```solidity
-// Request validation from validator
-bytes32 requestHash = validationRegistry.validationRequest(
+// Caller provides the requestHash
+bytes32 requestHash = keccak256("my-unique-request-id");
+
+// Only owner/operator of agentId can request validation
+validationRegistry.validationRequest(
     validatorAddress,
     agentId,
     "ipfs://validation-criteria",
-    keccak256(abi.encode("criteria")),
-    "security"
+    requestHash
 );
 
-// Validator responds (only assigned validator)
+// Validator responds (only assigned validator, tag is set here)
 validationRegistry.validationResponse(
     requestHash,
-    85,                        // score (1-100)
+    85,                         // score (0-100, 0 is valid)
     "ipfs://validation-report",
-    keccak256(abi.encode("report"))
+    keccak256(abi.encode("report")),
+    "security"                  // tag
 );
 ```
 
 ### Querying Reputation
 
 ```solidity
-// Get reputation summary (all feedback)
+// Get reputation summary (all feedback) — returns (count, summaryValue, summaryValueDecimals)
 address[] memory clients = new address[](0);
-IERC8004Reputation.ReputationSummary memory summary =
+(uint64 count, int128 summaryValue, uint8 summaryValueDecimals) =
     reputationRegistry.getSummary(agentId, clients, "", "");
 
 // Filter by specific clients
 address[] memory specificClients = new address[](1);
 specificClients[0] = clientAddress;
-summary = reputationRegistry.getSummary(agentId, specificClients, "", "");
+(count, summaryValue, summaryValueDecimals) =
+    reputationRegistry.getSummary(agentId, specificClients, "", "");
 
 // Filter by tags
-summary = reputationRegistry.getSummary(agentId, clients, "quality", "");
+(count, summaryValue, summaryValueDecimals) =
+    reputationRegistry.getSummary(agentId, clients, "quality", "");
+
+// Read individual feedback
+(int128 value, uint8 decimals, string memory tag1, string memory tag2, bool isRevoked) =
+    reputationRegistry.readFeedback(agentId, clientAddress, feedbackIndex);
+
+// Enumerate clients who gave feedback
+address[] memory feedbackClients = reputationRegistry.getClients(agentId);
 ```
 
 ### Deregistering an Agent
@@ -313,14 +351,18 @@ identityRegistry.deregister(agentId);
 ### Access Control
 
 - **StakingManager**: Only IdentityRegistry can stake/unstake, only ReputationRegistry can slash
-- **Agent Management**: Only agent owner can update URI, metadata, and set agent wallet
-- **Feedback**: Agent owners cannot submit feedback on their own agents
-- **Validation**: Only assigned validators can submit responses
+- **Agent Management**: Owner, approved operators (`setApprovalForAll`), or `getApproved` addresses can manage agents (URI, metadata, wallet)
+- **Reserved metadata key**: `"agentWallet"` cannot be set via `setMetadata()` or `register()` metadata — use `setAgentWallet()` instead
+- **Feedback**: Owner, operators, and approved addresses are all blocked from self-feedback (via `isAuthorizedOrOwner`)
+- **Validation requests**: Only owner/operator of the agentId can request validations
+- **Validation responses**: Only the assigned validator can submit responses
 
 ### Signature Verification (EIP-712)
 
+- Domain name: `"ERC8004IdentityRegistry"` (per spec)
+- Typehash: `AgentWalletSet(uint256 agentId,address newWallet,address owner,uint256 deadline)` — includes `owner`
 - Domain separator includes chainId (prevents cross-chain replay attacks)
-- Deadline parameter prevents stale signatures
+- **5-minute deadline cap**: `deadline` must be `<= block.timestamp + 5 minutes`
 - Supports both EOA (ECDSA) and smart contract wallets (ERC-1271)
 
 ### Reentrancy Protection
