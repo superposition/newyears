@@ -16,6 +16,7 @@ export default function CreatePage() {
     description: "",
     uri: "",
     capabilities: "",
+    endpoint: "",
   });
 
   const {
@@ -38,6 +39,9 @@ export default function CreatePage() {
     }
     if (formData.capabilities) {
       metadata.push({ key: "capabilities", value: toHex(formData.capabilities) });
+    }
+    if (formData.endpoint) {
+      metadata.push({ key: "endpoint", value: toHex(formData.endpoint) });
     }
 
     registerAgent(formData.uri, metadata);
@@ -152,6 +156,24 @@ export default function CreatePage() {
                     }
                     className="w-full px-4 py-3 rounded-lg bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-2 block">
+                    API Endpoint (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g., https://my-agent.example.com/api/v1"
+                    value={formData.endpoint}
+                    onChange={(e) =>
+                      setFormData({ ...formData, endpoint: e.target.value })
+                    }
+                    className="w-full px-4 py-3 rounded-lg bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <p className="text-sm text-muted-foreground mt-2">
+                    URL where other agents or clients can communicate with your agent
+                  </p>
                 </div>
 
                 <button

@@ -142,6 +142,13 @@ export function useLatestAgents(count: number) {
     args: [id],
   }));
 
+  const nameContracts = agentIds.map((id) => ({
+    address: CONTRACTS.agentIdentityRegistry,
+    abi: AgentIdentityRegistryABI,
+    functionName: "getMetadata" as const,
+    args: [id, "name"],
+  }));
+
   const { data: owners } = useReadContracts({
     contracts: ownerContracts,
     query: { enabled: agentIds.length > 0 },
@@ -157,6 +164,11 @@ export function useLatestAgents(count: number) {
     query: { enabled: agentIds.length > 0 },
   });
 
+  const { data: names } = useReadContracts({
+    contracts: nameContracts,
+    query: { enabled: agentIds.length > 0 },
+  });
+
   const agents = agentIds.map((id, i) => ({
     id,
     owner:
@@ -167,6 +179,10 @@ export function useLatestAgents(count: number) {
       uris?.[i]?.status === "success"
         ? (uris[i].result as string)
         : undefined,
+    name:
+      names?.[i]?.status === "success"
+        ? (names[i].result as `0x${string}`)
+        : undefined,
     feedbackCount:
       feedbacks?.[i]?.status === "success"
         ? Number(feedbacks[i].result as bigint)
@@ -174,6 +190,15 @@ export function useLatestAgents(count: number) {
   }));
 
   return { agents, total, ...rest };
+}
+
+export function useAgentMetadata(agentId: bigint, key: string) {
+  return useReadContract({
+    address: CONTRACTS.agentIdentityRegistry,
+    abi: AgentIdentityRegistryABI,
+    functionName: "getMetadata",
+    args: [agentId, key],
+  });
 }
 
 // ── Write Hooks ──

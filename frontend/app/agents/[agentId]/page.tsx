@@ -16,9 +16,12 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useAccount } from "wagmi";
+import { fromHex } from "viem";
 import {
   useAgentOwner,
   useAgentExists,
+  useAgentURI,
+  useAgentMetadata,
   useFeedbackCount,
   useReputationSummary,
   useAllFeedback,
@@ -37,11 +40,26 @@ export default function AgentDetailPage() {
   const { address } = useAccount();
   const { data: exists } = useAgentExists(agentId);
   const { data: owner } = useAgentOwner(agentId);
+  const { data: agentURI } = useAgentURI(agentId);
+  const { data: nameBytes } = useAgentMetadata(agentId, "name");
+  const { data: descBytes } = useAgentMetadata(agentId, "description");
+  const { data: endpointBytes } = useAgentMetadata(agentId, "endpoint");
+  const { data: capabilitiesBytes } = useAgentMetadata(agentId, "capabilities");
   const { data: feedbackCount } = useFeedbackCount(agentId);
   const { data: summary } = useReputationSummary(agentId);
   const { data: validationCount } = useValidationCount(agentId);
   const { data: feedbackList } = useAllFeedback(agentId);
   const { data: validations } = useAllValidations(agentId);
+
+  const decodeMetadata = (bytes: string | undefined) => {
+    if (!bytes || bytes === "0x") return "";
+    try { return fromHex(bytes as `0x${string}`, "string"); } catch { return ""; }
+  };
+
+  const agentName = decodeMetadata(nameBytes as string);
+  const agentDesc = decodeMetadata(descBytes as string);
+  const agentEndpoint = decodeMetadata(endpointBytes as string);
+  const agentCapabilities = decodeMetadata(capabilitiesBytes as string);
 
   const ownerStr = owner
     ? `${(owner as string).slice(0, 6)}...${(owner as string).slice(-4)}`
@@ -121,7 +139,7 @@ export default function AgentDetailPage() {
             </div>
             <div>
               <h1 className="text-3xl font-bold text-foreground">
-                Agent #{agentId.toString()}
+                {agentName || `Agent #${agentId.toString()}`}
               </h1>
               <p className="text-sm text-muted-foreground mt-1">
                 {owner ? (owner as string) : "Loading..."}
@@ -170,6 +188,37 @@ export default function AgentDetailPage() {
             <p className="text-sm text-red-200">
               {(deregError as Error).message?.split("\n")[0] ?? "Deregister failed"}
             </p>
+          </div>
+        )}
+
+        {/* Agent Info */}
+        {exists && (agentDesc || agentEndpoint || agentCapabilities || agentURI) && (
+          <div className="bg-card/50 border border-border rounded-xl p-6 mb-6 space-y-3">
+            {agentDesc && (
+              <p className="text-sm text-foreground">{agentDesc}</p>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              {agentEndpoint && (
+                <div>
+                  <span className="text-muted-foreground">API Endpoint: </span>
+                  <code className="text-primary bg-primary/10 px-1.5 py-0.5 rounded text-xs">
+                    {agentEndpoint}
+                  </code>
+                </div>
+              )}
+              {agentCapabilities && (
+                <div>
+                  <span className="text-muted-foreground">Capabilities: </span>
+                  <span className="text-foreground">{agentCapabilities}</span>
+                </div>
+              )}
+              {agentURI && (
+                <div className="sm:col-span-2">
+                  <span className="text-muted-foreground">Metadata URI: </span>
+                  <span className="text-foreground break-all text-xs">{agentURI as string}</span>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

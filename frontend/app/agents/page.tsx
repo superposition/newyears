@@ -3,17 +3,24 @@
 import Link from "next/link";
 import { Search, Bot, Plus } from "lucide-react";
 import { useState } from "react";
+import { fromHex } from "viem";
 import { useLatestAgents } from "@/lib/contracts/hooks";
 
 export default function AgentsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const { agents, total } = useLatestAgents(50);
 
+  const decodeName = (bytes: string | undefined) => {
+    if (!bytes || bytes === "0x") return "";
+    try { return fromHex(bytes as `0x${string}`, "string"); } catch { return ""; }
+  };
+
   const filtered = searchQuery.trim()
     ? agents.filter(
         (a) =>
           a.id.toString().includes(searchQuery) ||
-          a.owner?.toLowerCase().includes(searchQuery.toLowerCase()),
+          a.owner?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          decodeName(a.name).toLowerCase().includes(searchQuery.toLowerCase()),
       )
     : agents;
 
@@ -73,7 +80,7 @@ export default function AgentsPage() {
                   #{agent.id.toString()}
                 </div>
                 <h3 className="text-base font-semibold text-foreground group-hover:text-primary transition-colors">
-                  Agent #{agent.id.toString()}
+                  {decodeName(agent.name) || `Agent #${agent.id.toString()}`}
                 </h3>
                 <p className="text-sm text-muted-foreground mt-1">
                   {agent.owner
