@@ -21,14 +21,6 @@ contract DeployToRoax is Script {
         // Verify we're on ROAX network
         require(block.chainid == 135, "Not on ROAX network (chainID 135)");
 
-        // Check for PLASMA token address
-        address plasmaTokenAddress = vm.envOr("PLASMA_TOKEN_ADDRESS", address(0));
-        if (plasmaTokenAddress == address(0)) {
-            console2.log("WARNING: No PLASMA_TOKEN_ADDRESS provided!");
-            console2.log("A MockPLASMAToken will be deployed for testing purposes.");
-            console2.log("For production, set PLASMA_TOKEN_ADDRESS in your .env file.");
-        }
-
         // Execute deployment using the Deploy script logic
         Deploy deployScript = new Deploy();
         deployScript.run();

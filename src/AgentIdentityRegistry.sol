@@ -46,7 +46,7 @@ contract AgentIdentityRegistry is ERC721, ERC721URIStorage, ERC721Enumerable, Ow
      * @notice Constructor
      * @param _stakingManager Address of the staking manager contract
      */
-    constructor(address _stakingManager) ERC721("ERC8004 Agent Identity", "AGENT") Ownable(msg.sender) {
+    constructor(address payable _stakingManager) ERC721("ERC8004 Agent Identity", "AGENT") Ownable(msg.sender) {
         if (_stakingManager == address(0)) revert InvalidAddress();
         stakingManager = StakingManager(_stakingManager);
 
@@ -65,13 +65,14 @@ contract AgentIdentityRegistry is ERC721, ERC721URIStorage, ERC721Enumerable, Ow
      */
     function register(string calldata agentURI, MetadataEntry[] calldata metadata)
         external
+        payable
         override
         returns (uint256 agentId)
     {
         agentId = _nextAgentId++;
 
-        // Stake PLASMA tokens (will revert if insufficient approval/balance)
-        stakingManager.stake(msg.sender, agentId);
+        // Stake native PLASMA (will revert if insufficient value)
+        stakingManager.stake{value: msg.value}(agentId);
 
         // Mint NFT to caller
         _safeMint(msg.sender, agentId);

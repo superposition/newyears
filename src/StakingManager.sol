@@ -1,23 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title StakingManager
- * @notice Manages PLASMA token staking for agent registration with reputation-based slashing
+ * @notice Manages native PLASMA staking for agent registration with reputation-based slashing
  * @dev Critical security: Only IdentityRegistry can stake/unstake, only ReputationRegistry can slash
  */
 contract StakingManager is ReentrancyGuard, Ownable {
-    using SafeERC20 for IERC20;
-
-    /// @notice PLASMA token contract
-    IERC20 public immutable plasmaToken;
-
-    /// @notice Required stake amount (0.1 PLASMA tokens)
+    /// @notice Required stake amount (0.1 PLASMA)
     uint256 public constant STAKE_AMOUNT = 0.1 ether;
 
     /// @notice Slash percentage (50%)
@@ -69,14 +62,7 @@ contract StakingManager is ReentrancyGuard, Ownable {
         _;
     }
 
-    /**
-     * @notice Constructor
-     * @param _plasmaToken Address of the PLASMA token contract
-     */
-    constructor(address _plasmaToken) Ownable(msg.sender) {
-        if (_plasmaToken == address(0)) revert InvalidAddress();
-        plasmaToken = IERC20(_plasmaToken);
-    }
+    constructor() Ownable(msg.sender) {}
 
     /**
      * @notice Set the identity registry address (only owner)
@@ -100,17 +86,14 @@ contract StakingManager is ReentrancyGuard, Ownable {
 
     /**
      * @notice Lock stake for agent registration (called by IdentityRegistry)
-     * @param staker Address providing the stake
      * @param agentId Agent ID to stake for
      */
-    function stake(address staker, uint256 agentId) external onlyIdentityRegistry nonReentrant {
+    function stake(uint256 agentId) external payable onlyIdentityRegistry nonReentrant {
         if (agentStakes[agentId] > 0) revert AlreadyStaked();
-
-        // Transfer PLASMA tokens from staker to this contract
-        plasmaToken.safeTransferFrom(staker, address(this), STAKE_AMOUNT);
+        if (msg.value != STAKE_AMOUNT) revert InvalidAmount();
 
         agentStakes[agentId] = STAKE_AMOUNT;
-        emit StakeLocked(agentId, staker, STAKE_AMOUNT);
+        emit StakeLocked(agentId, tx.origin, STAKE_AMOUNT);
     }
 
     /**
@@ -127,7 +110,8 @@ contract StakingManager is ReentrancyGuard, Ownable {
         delete agentSlashed[agentId];
 
         // Refund remaining stake to recipient
-        plasmaToken.safeTransfer(recipient, stakedAmount);
+        (bool success,) = recipient.call{value: stakedAmount}("");
+        if (!success) revert TransferFailed();
         emit StakeRefunded(agentId, recipient, stakedAmount);
     }
 
@@ -158,8 +142,9 @@ contract StakingManager is ReentrancyGuard, Ownable {
             agentStakes[agentId] = remainingAmount;
             agentSlashed[agentId] = true;
 
-            // Transfer slashed tokens to owner (treasury)
-            plasmaToken.safeTransfer(owner(), slashAmount);
+            // Transfer slashed amount to owner (treasury)
+            (bool success,) = owner().call{value: slashAmount}("");
+            if (!success) revert TransferFailed();
 
             emit StakeSlashed(agentId, slashAmount, remainingAmount);
         }
@@ -180,6 +165,9 @@ contract StakingManager is ReentrancyGuard, Ownable {
      * @return Total balance
      */
     function getTotalStaked() external view returns (uint256) {
-        return plasmaToken.balanceOf(address(this));
+        return address(this).balance;
     }
+
+    /// @notice Accept native PLASMA transfers
+    receive() external payable {}
 }

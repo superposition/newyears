@@ -28,6 +28,10 @@ tab_width = 4
 bracket_spacing = true
 int_types = "long"
 
+[fs_permissions]
+read = ["./"]
+write = ["./"]
+
 [rpc_endpoints]
 mainnet = "${MAINNET_RPC_URL}"
 roax = "https://devrpc.roax.net"

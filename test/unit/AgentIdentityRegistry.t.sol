@@ -26,9 +26,8 @@ contract AgentIdentityRegistryTest is TestHelper {
         assertEq(abi.decode(identityRegistry.getMetadata(agentId, "version"), (string)), "1.0.0");
     }
 
-    function test_RevertWhen_Register_InsufficientApproval() public {
+    function test_RevertWhen_Register_InsufficientValue() public {
         vm.startPrank(alice);
-        // Don't approve tokens
         IERC8004Identity.MetadataEntry[] memory metadata = new IERC8004Identity.MetadataEntry[](0);
         vm.expectRevert();
         identityRegistry.register("ipfs://agent1", metadata);
@@ -38,12 +37,12 @@ contract AgentIdentityRegistryTest is TestHelper {
     function test_Deregister() public {
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
 
-        uint256 balanceBefore = plasmaToken.balanceOf(alice);
+        uint256 balanceBefore = address(alice).balance;
 
         vm.prank(alice);
         identityRegistry.deregister(agentId);
 
-        uint256 balanceAfter = plasmaToken.balanceOf(alice);
+        uint256 balanceAfter = address(alice).balance;
 
         // Should refund stake
         assertEq(balanceAfter - balanceBefore, STAKE_AMOUNT);

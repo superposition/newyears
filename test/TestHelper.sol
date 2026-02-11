@@ -3,7 +3,6 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {console2} from "forge-std/console2.sol";
-import {MockPLASMAToken} from "../src/mocks/MockPLASMAToken.sol";
 import {StakingManager} from "../src/StakingManager.sol";
 import {AgentIdentityRegistry} from "../src/AgentIdentityRegistry.sol";
 import {ReputationRegistry} from "../src/ReputationRegistry.sol";
@@ -15,7 +14,6 @@ import {IERC8004Identity} from "../src/interfaces/IERC8004Identity.sol";
  * @notice Base test contract with common setup and utilities
  */
 contract TestHelper is Test {
-    MockPLASMAToken public plasmaToken;
     StakingManager public stakingManager;
     AgentIdentityRegistry public identityRegistry;
     ReputationRegistry public reputationRegistry;
@@ -34,9 +32,8 @@ contract TestHelper is Test {
         vm.startPrank(deployer);
 
         // Deploy contracts
-        plasmaToken = new MockPLASMAToken();
-        stakingManager = new StakingManager(address(plasmaToken));
-        identityRegistry = new AgentIdentityRegistry(address(stakingManager));
+        stakingManager = new StakingManager();
+        identityRegistry = new AgentIdentityRegistry(payable(address(stakingManager)));
         reputationRegistry = new ReputationRegistry(address(identityRegistry));
         validationRegistry = new ValidationRegistry(address(identityRegistry));
 
@@ -44,20 +41,22 @@ contract TestHelper is Test {
         stakingManager.setIdentityRegistry(address(identityRegistry));
         stakingManager.setReputationRegistry(address(reputationRegistry));
 
-        // Fund test accounts
-        plasmaToken.mint(alice, 1000 ether);
-        plasmaToken.mint(bob, 1000 ether);
-        plasmaToken.mint(charlie, 1000 ether);
-
         vm.stopPrank();
+
+        // Fund test accounts with native PLASMA
+        vm.deal(alice, 1000 ether);
+        vm.deal(bob, 1000 ether);
+        vm.deal(charlie, 1000 ether);
+        vm.deal(validator1, 1000 ether);
+        vm.deal(validator2, 1000 ether);
+        vm.deal(deployer, 1000 ether);
     }
 
     // Helper: Register an agent
     function registerAgent(address user, string memory uri) internal returns (uint256 agentId) {
         vm.startPrank(user);
-        plasmaToken.approve(address(stakingManager), STAKE_AMOUNT);
         IERC8004Identity.MetadataEntry[] memory metadata = new IERC8004Identity.MetadataEntry[](0);
-        agentId = identityRegistry.register(uri, metadata);
+        agentId = identityRegistry.register{value: STAKE_AMOUNT}(uri, metadata);
         vm.stopPrank();
     }
 
@@ -68,8 +67,7 @@ contract TestHelper is Test {
         IERC8004Identity.MetadataEntry[] memory metadata
     ) internal returns (uint256 agentId) {
         vm.startPrank(user);
-        plasmaToken.approve(address(stakingManager), STAKE_AMOUNT);
-        agentId = identityRegistry.register(uri, metadata);
+        agentId = identityRegistry.register{value: STAKE_AMOUNT}(uri, metadata);
         vm.stopPrank();
     }
 

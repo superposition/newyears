@@ -62,6 +62,7 @@ interface IERC8004Identity {
      */
     function register(string calldata agentURI, MetadataEntry[] calldata metadata)
         external
+        payable
         returns (uint256 agentId);
 
     /**

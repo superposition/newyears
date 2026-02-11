@@ -13,11 +13,11 @@ import {IERC8004Validation} from "../../src/interfaces/IERC8004Validation.sol";
 contract FullRegistrationFlowTest is TestHelper {
     function test_FullFlow_RegistrationToDeregistration() public {
         // Step 1: Register agent with PLASMA stake
-        uint256 balanceBeforeRegistration = plasmaToken.balanceOf(alice);
+        uint256 balanceBeforeRegistration = address(alice).balance;
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
 
         assertEq(identityRegistry.ownerOf(agentId), alice);
-        assertEq(plasmaToken.balanceOf(alice), balanceBeforeRegistration - STAKE_AMOUNT);
+        assertEq(address(alice).balance, balanceBeforeRegistration - STAKE_AMOUNT);
 
         // Step 2: Submit feedback
         giveFeedback(bob, agentId, 90, "quality", "excellent");
@@ -38,13 +38,13 @@ contract FullRegistrationFlowTest is TestHelper {
         vm.prank(alice);
         identityRegistry.deregister(agentId);
 
-        assertEq(plasmaToken.balanceOf(alice), balanceBeforeRegistration);
+        assertEq(address(alice).balance, balanceBeforeRegistration);
         assertFalse(identityRegistry.exists(agentId));
     }
 
     function test_FullFlow_WithSlashing() public {
         // Step 1: Register agent
-        uint256 balanceBeforeRegistration = plasmaToken.balanceOf(alice);
+        uint256 balanceBeforeRegistration = address(alice).balance;
         uint256 agentId = registerAgent(alice, "ipfs://agent1");
 
         // Step 2: Submit bad feedback (trigger slashing)
@@ -64,7 +64,7 @@ contract FullRegistrationFlowTest is TestHelper {
         identityRegistry.deregister(agentId);
 
         // Should only get back 50% of stake
-        assertEq(plasmaToken.balanceOf(alice), balanceBeforeRegistration - (STAKE_AMOUNT / 2));
+        assertEq(address(alice).balance, balanceBeforeRegistration - (STAKE_AMOUNT / 2));
     }
 
     function test_FullFlow_MultipleAgents() public {
@@ -96,12 +96,11 @@ contract FullRegistrationFlowTest is TestHelper {
     function test_FullFlow_WithMetadataUpdates() public {
         // Register with initial metadata
         vm.startPrank(alice);
-        plasmaToken.approve(address(stakingManager), STAKE_AMOUNT);
 
         IERC8004Identity.MetadataEntry[] memory metadata = new IERC8004Identity.MetadataEntry[](1);
         metadata[0] = IERC8004Identity.MetadataEntry({key: "version", value: abi.encode("1.0.0")});
 
-        uint256 agentId = identityRegistry.register("ipfs://agent1", metadata);
+        uint256 agentId = identityRegistry.register{value: STAKE_AMOUNT}("ipfs://agent1", metadata);
 
         // Update metadata
         identityRegistry.setMetadata(agentId, "version", abi.encode("2.0.0"));

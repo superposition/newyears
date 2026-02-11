@@ -7,7 +7,6 @@ import {StakingManager} from "../src/StakingManager.sol";
 import {AgentIdentityRegistry} from "../src/AgentIdentityRegistry.sol";
 import {ReputationRegistry} from "../src/ReputationRegistry.sol";
 import {ValidationRegistry} from "../src/ValidationRegistry.sol";
-import {MockPLASMAToken} from "../src/mocks/MockPLASMAToken.sol";
 
 /**
  * @title Deploy
@@ -21,9 +20,6 @@ contract Deploy is Script {
     ReputationRegistry public reputationRegistry;
     ValidationRegistry public validationRegistry;
 
-    // PLASMA token address (set by child scripts or env var)
-    address public plasmaTokenAddress;
-
     function run() external virtual {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
@@ -31,32 +27,19 @@ contract Deploy is Script {
         console2.log("Deploying contracts with deployer:", deployer);
         console2.log("Chain ID:", block.chainid);
 
-        // Get PLASMA token address from environment or deploy mock
-        plasmaTokenAddress = vm.envOr("PLASMA_TOKEN_ADDRESS", address(0));
-
         vm.startBroadcast(deployerPrivateKey);
-
-        // Deploy MockPLASMAToken if not provided
-        if (plasmaTokenAddress == address(0)) {
-            console2.log("No PLASMA_TOKEN_ADDRESS provided, deploying MockPLASMAToken...");
-            MockPLASMAToken plasmaToken = new MockPLASMAToken();
-            plasmaTokenAddress = address(plasmaToken);
-            console2.log("MockPLASMAToken deployed at:", plasmaTokenAddress);
-        } else {
-            console2.log("Using existing PLASMA token at:", plasmaTokenAddress);
-        }
 
         // Deploy contracts in dependency order
         console2.log("\n=== Deploying Contracts ===");
 
-        // 1. Deploy StakingManager
+        // 1. Deploy StakingManager (native PLASMA, no token address needed)
         console2.log("1. Deploying StakingManager...");
-        stakingManager = new StakingManager(plasmaTokenAddress);
+        stakingManager = new StakingManager();
         console2.log("   StakingManager deployed at:", address(stakingManager));
 
         // 2. Deploy AgentIdentityRegistry
         console2.log("2. Deploying AgentIdentityRegistry...");
-        identityRegistry = new AgentIdentityRegistry(address(stakingManager));
+        identityRegistry = new AgentIdentityRegistry(payable(address(stakingManager)));
         console2.log("   AgentIdentityRegistry deployed at:", address(identityRegistry));
 
         // 3. Deploy ReputationRegistry
@@ -82,7 +65,6 @@ contract Deploy is Script {
 
         // Print deployment summary
         console2.log("\n=== Deployment Summary ===");
-        console2.log("PLASMA Token:           ", plasmaTokenAddress);
         console2.log("StakingManager:         ", address(stakingManager));
         console2.log("AgentIdentityRegistry:  ", address(identityRegistry));
         console2.log("ReputationRegistry:     ", address(reputationRegistry));
@@ -95,7 +77,6 @@ contract Deploy is Script {
 
     function saveDeploymentAddresses() internal {
         string memory json = "";
-        json = vm.serializeAddress("addresses", "plasmaToken", plasmaTokenAddress);
         json = vm.serializeAddress("addresses", "stakingManager", address(stakingManager));
         json = vm.serializeAddress("addresses", "identityRegistry", address(identityRegistry));
         json = vm.serializeAddress("addresses", "reputationRegistry", address(reputationRegistry));

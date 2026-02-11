@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    padding: 0;
+    margin: 0;
+  }
+
+  html,
+  body {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  body {
+    color: hsl(320, 90%, 98%);
+    background: linear-gradient(to bottom, #0c080f 0%, #1a0d1f 100%);
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(330, 25%, 8%);
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(330, 85%, 55%);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(330, 85%, 65%);
+}
+
+/* Glow effects */
+.glow-text {
+  text-shadow: 0 0 20px rgba(236, 72, 153, 0.5);
+}
+
+.glow-border {
+  box-shadow: 0 0 20px rgba(236, 72, 153, 0.3);
+}
+
+.glow-border:hover {
+  box-shadow: 0 0 30px rgba(236, 72, 153, 0.6);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #ec4899 0%, #db2777 50%, #be185d 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Animated wave border */
+.wave-border {
+  position: relative;
+  border-radius: 0.75rem;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--wave-angle, 0deg),
+    #ec4899,
+    #a855f7,
+    #6366f1,
+    #ec4899
+  );
+  animation: wave-rotate 3s linear infinite;
+}
+
+.wave-border > * {
+  border-radius: calc(0.75rem - 2px);
+}
+
+@keyframes wave-rotate {
+  to {
+    --wave-angle: 360deg;
+  }
+}
+
+@property --wave-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
