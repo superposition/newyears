@@ -1,6 +1,6 @@
 # ERC-8004 Trustless Agents Implementation on ROAX
 
-A complete implementation of [ERC-8004 (Trustless Agents)](https://eips.ethereum.org/EIPS/eip-8004) on the ROAX blockchain with PLASMA token staking requirements. ERC-8004 provides on-chain identity, reputation, and validation registries for AI agents to interact trustlessly across organizational boundaries.
+A complete implementation of [ERC-8004 (Trustless Agents)](https://eips.ethereum.org/EIPS/eip-8004) on the ROAX blockchain with native PLASMA staking requirements. ERC-8004 provides on-chain identity, reputation, and validation registries for AI agents to interact trustlessly across organizational boundaries.
 
 ## Overview
 
@@ -9,26 +9,35 @@ ERC-8004 enables AI agents to:
 - **Build verifiable reputations** through structured feedback with revocation and aggregation
 - **Undergo independent validation** by third-party validators with attestation tracking
 
-**Custom Implementation**: This implementation requires a 0.1 PLASMA token stake per agent registration to prevent spam and ensure economic accountability. Stakes are automatically slashed by 50% if an agent's average reputation falls below -50 (with at least 5 reviews).
+**Custom Implementation**: This implementation requires a 0.1 PLASMA (native token) stake per agent registration to prevent spam and ensure economic accountability. Stakes are automatically slashed by 50% if an agent's average reputation falls below -50 (with at least 5 reviews).
 
 ## Architecture
 
-### Smart Contracts
+### Project Structure
 
 ```
-src/
-├── interfaces/
-│   ├── IERC8004Identity.sol         # Identity registry interface
-│   ├── IERC8004Reputation.sol       # Reputation registry interface
-│   └── IERC8004Validation.sol       # Validation registry interface
-├── libraries/
-│   └── SignatureVerifier.sol        # EIP-712 signature verification
-├── AgentIdentityRegistry.sol        # ERC-721 agent identities
-├── StakingManager.sol               # PLASMA token staking with slashing
-├── ReputationRegistry.sol           # Feedback and reputation system
-├── ValidationRegistry.sol           # Validator attestations
-└── mocks/
-    └── MockPLASMAToken.sol          # Mock PLASMA token for testing
+├── src/                              # Smart contracts
+│   ├── interfaces/
+│   │   ├── IERC8004Identity.sol      # Identity registry interface
+│   │   ├── IERC8004Reputation.sol    # Reputation registry interface
+│   │   └── IERC8004Validation.sol    # Validation registry interface
+│   ├── libraries/
+│   │   └── SignatureVerifier.sol     # EIP-712 signature verification
+│   ├── AgentIdentityRegistry.sol     # ERC-721 agent identities
+│   ├── StakingManager.sol            # Native PLASMA staking with slashing
+│   ├── ReputationRegistry.sol        # Feedback and reputation system
+│   └── ValidationRegistry.sol        # Validator attestations
+├── test/                             # Tests
+│   ├── unit/                         # Unit tests per contract
+│   ├── integration/                  # End-to-end flow tests
+│   └── TestHelper.sol                # Base test contract
+├── script/                           # Deployment scripts
+├── frontend/                         # Next.js explorer & interaction UI
+│   ├── app/                          # Pages (agents, create, feedback, leaderboard)
+│   ├── components/                   # UI components & providers
+│   └── lib/                          # Contract ABIs, addresses, hooks
+├── foundry.toml                      # Foundry configuration
+└── README.md
 ```
 
 ### Contract Interactions
@@ -38,19 +47,18 @@ src/
 │                     User (Agent Owner)                       │
 └───────────┬─────────────────────────────────────────────────┘
             │
-            │ 1. Approve 0.1 PLASMA
-            │ 2. register()
+            │ register{value: 0.1 PLASMA}()
             ▼
 ┌─────────────────────────┐       Mints NFT
 │  AgentIdentityRegistry  │◄──────────────┐
 │      (ERC-721)          │                │
 └────────┬────────────────┘                │
          │                                 │
-         │ Stakes 0.1 PLASMA               │
+         │ Forwards 0.1 PLASMA             │
          ▼                                 │
 ┌─────────────────────────┐                │
 │    StakingManager       │                │
-│  (Holds PLASMA stakes)  │                │
+│ (Holds native stakes)   │                │
 └────────┬────────────────┘                │
          │                                 │
          │ Triggers slashing               │
@@ -77,12 +85,12 @@ src/
 - Automatic wallet clearing on NFT transfer
 - Enumerable for efficient agent discovery
 
-### 2. PLASMA Staking
+### 2. Native PLASMA Staking
 
-- **Registration**: Requires 0.1 PLASMA token approval and stake
-- **Slashing**: Automatic 50% slash if average reputation < -50 (with ≥5 reviews)
+- **Registration**: Send 0.1 PLASMA with the `register()` call (no separate approval needed)
+- **Slashing**: Automatic 50% slash if average reputation < -50 (with >= 5 reviews)
 - **Refund**: Remaining stake returned on agent deregistration
-- **Security**: ReentrancyGuard protection on all token operations
+- **Security**: ReentrancyGuard protection on all operations
 
 ### 3. Reputation System
 
@@ -98,9 +106,48 @@ src/
 
 - **Request/Response Model**: Requestors initiate validation, validators respond
 - **Score Range**: 1-100, where 0 is reserved for pending validations
-- **Pass/Fail Tracking**: Scores ≥50 = passed, <50 = failed
+- **Pass/Fail Tracking**: Scores >= 50 = passed, < 50 = failed
 - **Tag Categorization**: Validation types (security, performance, etc.)
 - **Summary Aggregation**: Filter by validator and tag
+
+## Contract Addresses (ROAX Devnet)
+
+Deployed on ROAX network (chainID 135):
+
+```
+StakingManager:         0xd76F626334BE6970ac0F3C5A25bBe4A8eF07F6cc
+AgentIdentityRegistry:  0x646306682cD4AB18007c6b7B4AA54Aa0731d49A8
+ReputationRegistry:     0x8d66B496FdaA46c3885b6A485E36e4291fCc969F
+ValidationRegistry:     0xa95062757f6A17682Fe70B00Ed7b485D4767E0cd
+```
+
+## Frontend
+
+The frontend is a Next.js app that lets users browse agents, register new agents, give feedback, and view reputation/validation data.
+
+### Setup
+
+```bash
+cd frontend
+pnpm install   # or npm install
+pnpm dev       # starts on http://localhost:3000
+```
+
+### Features
+
+- **Browse Agents**: View all registered agents with reputation summaries
+- **Register Agent**: Connect wallet, fill in metadata, stake 0.1 PLASMA to mint an agent NFT
+- **Give Feedback**: Rate agents (-100 to +100) with tags and comments
+- **Revoke Feedback**: Revoke your own previously submitted feedback
+- **Deregister Agent**: Owner-only action to burn the agent NFT and reclaim stake
+- **Leaderboard**: View agents ranked by reputation
+
+### Tech Stack
+
+- Next.js 15 + React 19
+- wagmi v2 + viem for contract interactions
+- RainbowKit for wallet connection
+- Tailwind CSS v4
 
 ## Deployment
 
@@ -123,7 +170,6 @@ cp .env.example .env
 
 # Edit .env with your values:
 # - PRIVATE_KEY: Your deployer wallet private key
-# - PLASMA_TOKEN_ADDRESS: Existing PLASMA token (optional, will deploy mock if not set)
 # - ROAX_RPC_URL: https://devrpc.roax.net
 ```
 
@@ -138,8 +184,6 @@ forge script script/DeployToRoax.s.sol \
   --rpc-url $ROAX_RPC_URL \
   --broadcast \
   --legacy
-
-# Deployment addresses will be saved to deployments-135.json
 ```
 
 ### Deploy Locally (for testing)
@@ -172,17 +216,8 @@ forge test --match-path test/unit/AgentIdentityRegistry.t.sol
 ### Test Coverage
 
 ```bash
-# Generate coverage report
 forge coverage
-
-# Generate detailed coverage report
-forge coverage --report lcov
 ```
-
-**Test Statistics**:
-- **Unit Tests**: 65 tests covering all contracts
-- **Integration Tests**: 6 end-to-end flow tests
-- **Total**: 71 tests, 100% passing
 
 ### Gas Report
 
@@ -195,18 +230,18 @@ forge test --gas-report
 ### Registering an Agent
 
 ```solidity
-// 1. Approve PLASMA tokens
-IERC20(plasmaToken).approve(address(stakingManager), 0.1 ether);
-
-// 2. Prepare metadata
+// Prepare metadata
 IERC8004Identity.MetadataEntry[] memory metadata = new IERC8004Identity.MetadataEntry[](1);
 metadata[0] = IERC8004Identity.MetadataEntry({
     key: "name",
     value: abi.encode("My AI Agent")
 });
 
-// 3. Register agent
-uint256 agentId = identityRegistry.register("ipfs://agent-metadata-uri", metadata);
+// Register agent — sends 0.1 PLASMA as native value
+uint256 agentId = identityRegistry.register{value: 0.1 ether}(
+    "ipfs://agent-metadata-uri",
+    metadata
+);
 ```
 
 ### Submitting Feedback
@@ -290,7 +325,7 @@ identityRegistry.deregister(agentId);
 
 ### Reentrancy Protection
 
-- All token transfer operations use `ReentrancyGuard`
+- All native token transfer operations use `ReentrancyGuard`
 - Pull-over-push pattern for stake refunds
 
 ### Slashing Protection
@@ -305,62 +340,9 @@ identityRegistry.deregister(agentId);
 - Self-feedback prevention
 - Client address filtering in reputation summaries
 
-## Contract Addresses
-
-After deployment to ROAX network (chainID 135):
-
-```
-PLASMA Token:           <deployed_address>
-StakingManager:         <deployed_address>
-AgentIdentityRegistry:  <deployed_address>
-ReputationRegistry:     <deployed_address>
-ValidationRegistry:     <deployed_address>
-```
-
-Addresses are saved in `deployments-135.json` after deployment.
-
-## Development
-
-### Project Structure
-
-```
-ERC8004/
-├── src/                      # Smart contracts
-│   ├── interfaces/           # ERC-8004 interfaces
-│   ├── libraries/            # Helper libraries
-│   └── mocks/                # Mock contracts for testing
-├── test/                     # Tests
-│   ├── unit/                 # Unit tests per contract
-│   ├── integration/          # End-to-end flow tests
-│   └── TestHelper.sol        # Base test contract
-├── script/                   # Deployment scripts
-├── foundry.toml              # Foundry configuration
-└── README.md                 # This file
-```
-
-### Build
-
-```bash
-forge build
-```
-
-### Format
-
-```bash
-forge fmt
-```
-
-### Clean
-
-```bash
-forge clean
-```
-
 ## References
 
 - [ERC-8004 Official Specification](https://eips.ethereum.org/EIPS/eip-8004)
-- [ERC-8004 Reference Implementation](https://github.com/erc-8004/erc-8004-contracts)
-- [Ethereum Magicians Discussion](https://ethereum-magicians.org/t/erc-8004-trustless-agents/25098)
 - [ROAX Network Documentation](https://roax.net)
 - [Foundry Book](https://book.getfoundry.sh/)
 
@@ -368,22 +350,6 @@ forge clean
 
 MIT
 
-## Contributing
-
-This is a reference implementation for educational and testing purposes. For production use, consider:
-
-1. **Security Audit**: Conduct thorough security audit by reputable firm
-2. **Gas Optimization**: Further optimize gas costs for high-volume scenarios
-3. **Governance**: Implement governance mechanisms for parameter updates
-4. **Emergency Controls**: Add pause functionality and upgrade paths
-5. **Economic Analysis**: Model staking economics and slashing impacts
-
-## Support
-
-For issues or questions:
-- GitHub Issues: [Submit an issue](https://github.com/anthropics/claude-code/issues)
-- ERC-8004 Discussion: [Ethereum Magicians](https://ethereum-magicians.org/t/erc-8004-trustless-agents/25098)
-
 ---
 
-**Built with [Foundry](https://getfoundry.sh/) | Deployed on [ROAX Network](https://roax.net)**
+**Built with [Foundry](https://getfoundry.sh/) + [Next.js](https://nextjs.org/) | Deployed on [ROAX Network](https://roax.net)**
