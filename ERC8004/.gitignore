@@ -1,0 +1,28 @@
+# Foundry
+cache/
+out/
+broadcast/
+*.log
+
+# Environment variables
+.env
+
+# Node modules (for frontend)
+node_modules/
+.next/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Deployment artifacts
+deployments-*.json
